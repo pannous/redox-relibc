@@ -136,7 +136,7 @@ pub unsafe extern "C" fn vsyslog(priority: c_int, message: *const c_char, mut ap
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/closelog.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn syslog(priority: c_int, message: *const c_char, mut __valist: ...) {
-    vsyslog(priority, message, __valist.as_va_list());
+    vsyslog(priority, message, __valist);
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/closelog.html>.

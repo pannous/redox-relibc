@@ -1368,7 +1368,7 @@ pub unsafe extern "C" fn fprintf(
     format: *const c_char,
     mut __valist: ...
 ) -> c_int {
-    vfprintf(file, format, __valist.as_va_list())
+    vfprintf(file, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vdprintf.html>.
@@ -1386,7 +1386,7 @@ pub unsafe extern "C" fn vdprintf(fd: c_int, format: *const c_char, ap: va_list)
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/dprintf.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dprintf(fd: c_int, format: *const c_char, mut __valist: ...) -> c_int {
-    vdprintf(fd, format, __valist.as_va_list())
+    vdprintf(fd, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfprintf.html>.
@@ -1398,7 +1398,7 @@ pub unsafe extern "C" fn vprintf(format: *const c_char, ap: va_list) -> c_int {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fprintf.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn printf(format: *const c_char, mut __valist: ...) -> c_int {
-    vfprintf(&mut *stdout, format, __valist.as_va_list())
+    vfprintf(&mut *stdout, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfprintf.html>.
@@ -1423,7 +1423,7 @@ pub unsafe extern "C" fn asprintf(
     format: *const c_char,
     mut __valist: ...
 ) -> c_int {
-    vasprintf(strp, format, __valist.as_va_list())
+    vasprintf(strp, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfprintf.html>.
@@ -1452,7 +1452,7 @@ pub unsafe extern "C" fn snprintf(
     printf::printf(
         &mut platform::StringWriter(s as *mut u8, n as usize),
         CStr::from_ptr(format),
-        __valist.as_va_list(),
+        __valist,
     )
 }
 
@@ -1476,7 +1476,7 @@ pub unsafe extern "C" fn sprintf(
     printf::printf(
         &mut platform::UnsafeStringWriter(s as *mut u8),
         CStr::from_ptr(format),
-        __valist.as_va_list(),
+        __valist,
     )
 }
 
@@ -1503,7 +1503,7 @@ pub unsafe extern "C" fn fscanf(
     format: *const c_char,
     mut __valist: ...
 ) -> c_int {
-    vfscanf(file, format, __valist.as_va_list())
+    vfscanf(file, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfscanf.html>.
@@ -1515,7 +1515,7 @@ pub unsafe extern "C" fn vscanf(format: *const c_char, ap: va_list) -> c_int {
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fscanf.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn scanf(format: *const c_char, mut __valist: ...) -> c_int {
-    vfscanf(&mut *stdin, format, __valist.as_va_list())
+    vfscanf(&mut *stdin, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfscanf.html>.
@@ -1533,7 +1533,7 @@ pub unsafe extern "C" fn sscanf(
     mut __valist: ...
 ) -> c_int {
     let reader = (s as *const u8).into();
-    scanf::scanf(reader, format, __valist.as_va_list())
+    scanf::scanf(reader, format, __valist)
 }
 
 pub unsafe fn flush_io_streams() {

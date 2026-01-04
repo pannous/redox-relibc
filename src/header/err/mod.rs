@@ -68,7 +68,7 @@ pub unsafe extern "C" fn err_set_exit(ef: ExitCallback) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn err(eval: c_int, fmt: *const c_char, mut va_list: ...) -> ! {
     let code = Some(ERRNO.get());
-    err_exit(eval, code, fmt, va_list.as_va_list())
+    err_exit(eval, code, fmt, va_list)
 }
 
 /// Print a user message then an error message for `code` before exiting with `eval` as a return.
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn err(eval: c_int, fmt: *const c_char, mut va_list: ...) 
 /// Exits with `eval` as an error code.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn errc(eval: c_int, code: c_int, fmt: *const c_char, mut va_list: ...) -> ! {
-    err_exit(eval, Some(code), fmt, va_list.as_va_list())
+    err_exit(eval, Some(code), fmt, va_list)
 }
 
 /// Print a user message then exits with `eval` as a return.
@@ -90,7 +90,7 @@ pub unsafe extern "C" fn errc(eval: c_int, code: c_int, fmt: *const c_char, mut 
 /// Exits with `eval` as an error code.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn errx(eval: c_int, fmt: *const c_char, mut va_list: ...) -> ! {
-    err_exit(eval, None, fmt, va_list.as_va_list())
+    err_exit(eval, None, fmt, va_list)
 }
 
 /// Print a user message and then an error message for [`ERRNO`].
@@ -99,7 +99,7 @@ pub unsafe extern "C" fn errx(eval: c_int, fmt: *const c_char, mut va_list: ...)
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn warn(fmt: *const c_char, mut va_list: ...) {
     let code = Some(ERRNO.get());
-    display_message(code, fmt, va_list.as_va_list());
+    display_message(code, fmt, va_list);
 }
 
 /// Print a user message then an error message for `code`.
@@ -107,7 +107,7 @@ pub unsafe extern "C" fn warn(fmt: *const c_char, mut va_list: ...) {
 /// The message format is `progname: fmt: strerror(code)`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn warnc(code: c_int, fmt: *const c_char, mut va_list: ...) {
-    display_message(Some(code), fmt, va_list.as_va_list());
+    display_message(Some(code), fmt, va_list);
 }
 
 /// Print a user message as a warning.
@@ -115,7 +115,7 @@ pub unsafe extern "C" fn warnc(code: c_int, fmt: *const c_char, mut va_list: ...
 /// The message format is `progname: fmt`
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn warnx(fmt: *const c_char, mut va_list: ...) {
-    display_message(None, fmt, va_list.as_va_list());
+    display_message(None, fmt, va_list);
 }
 
 /// See [`err`].

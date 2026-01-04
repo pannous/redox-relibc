@@ -170,7 +170,7 @@ pub unsafe extern "C" fn fwscanf(
     format: *const wchar_t,
     mut __valist: ...
 ) -> c_int {
-    vfwscanf(stream, format, __valist.as_va_list())
+    vfwscanf(stream, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/getwc.html>.
@@ -326,7 +326,7 @@ pub unsafe extern "C" fn swscanf(
     format: *const wchar_t,
     mut __valist: ...
 ) -> c_int {
-    vswscanf(s, format, __valist.as_va_list())
+    vswscanf(s, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/ungetwc.html>.
@@ -380,7 +380,7 @@ pub unsafe extern "C" fn fwprintf(
     format: *const wchar_t,
     mut __valist: ...
 ) -> c_int {
-    vfwprintf(stream, format, __valist.as_va_list())
+    vfwprintf(stream, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfwprintf.html>.
@@ -392,7 +392,7 @@ pub unsafe extern "C" fn vwprintf(format: *const wchar_t, arg: va_list) -> c_int
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/fwprintf.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wprintf(format: *const wchar_t, mut __valist: ...) -> c_int {
-    vfwprintf(&mut *stdout, format, __valist.as_va_list())
+    vfwprintf(&mut *stdout, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/vfwprintf.html>.
@@ -417,7 +417,7 @@ pub unsafe extern "C" fn swprintf(
     format: *const wchar_t,
     mut __valist: ...
 ) -> c_int {
-    vswprintf(s, n, format, __valist.as_va_list())
+    vswprintf(s, n, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/wcpcpy.html>.
@@ -1112,7 +1112,7 @@ pub unsafe extern "C" fn vwscanf(format: *const wchar_t, __valist: va_list) -> c
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/wscanf.html>.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wscanf(format: *const wchar_t, mut __valist: ...) -> c_int {
-    vfwscanf(stdin, format, __valist.as_va_list())
+    vfwscanf(stdin, format, __valist)
 }
 
 /// See <https://pubs.opengroup.org/onlinepubs/9799919799/functions/wcscasecmp.html>.

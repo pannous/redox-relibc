@@ -4,7 +4,7 @@
 
 use core::{
     convert::TryFrom,
-    ffi::VaListImpl,
+    ffi::VaList,
     mem::{self, MaybeUninit},
     ptr, slice,
 };
@@ -1170,16 +1170,17 @@ pub extern "C" fn vfork() -> pid_t {
     unimplemented!();
 }
 
-unsafe fn with_argv(
-    mut va: VaListImpl,
+unsafe fn with_argv<'a>(
+    mut va: VaList<'a>,
     arg0: *const c_char,
-    f: impl FnOnce(&[*const c_char], VaListImpl) -> c_int,
+    f: impl FnOnce(&[*const c_char], VaList<'a>) -> c_int,
 ) -> c_int {
-    let argc = 1 + va.with_copy(|mut copy| {
+    let argc = 1 + {
+        let mut copy = va.clone();
         core::iter::from_fn(|| Some(copy.arg::<*const c_char>()))
             .position(|p| p.is_null())
             .unwrap()
-    });
+    };
 
     let mut stack: [MaybeUninit<*const c_char>; 32] = [MaybeUninit::uninit(); 32];
 
