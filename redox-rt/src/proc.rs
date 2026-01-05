@@ -710,7 +710,7 @@ impl FdGuard<false> {
 
     #[inline]
     pub fn open<T: AsRef<str>>(path: T, flags: usize) -> Result<Self> {
-        syscall::open(path, flags).map(Self::new)
+        syscall::openat(0, path, flags, 0).map(Self::new)
     }
 
     #[inline]
@@ -1081,7 +1081,7 @@ pub fn new_child_process(args: &ForkArgs<'_>) -> Result<NewChildProc> {
 
 pub unsafe fn make_init() -> (&'static FdGuardUpper, &'static FdGuardUpper) {
     let proc_fd = FdGuard::new(
-        syscall::open("/scheme/proc/init", syscall::O_CLOEXEC).expect("failed to create init"),
+        syscall::openat(0, "/scheme/proc/init", syscall::O_CLOEXEC, 0).expect("failed to create init"),
     )
     .to_upper()
     .unwrap();
