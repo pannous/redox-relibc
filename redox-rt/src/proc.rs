@@ -702,6 +702,14 @@ pub struct FdGuard<const UPPER: bool = false> {
     fd: usize,
 }
 pub type FdGuardUpper = FdGuard<true>;
+/// Legacy SYS_OPEN syscall (openat with fd=0 returns EOPNOTSUPP for scheme paths)
+const SYS_OPEN_LEGACY: usize = 0x1000_0000 | 0x0010_0000 | 5;
+
+#[inline]
+fn legacy_open_for_fdguard(path: &str, flags: usize) -> Result<usize> {
+    unsafe { syscall::syscall3(SYS_OPEN_LEGACY, path.as_ptr() as usize, path.len(), flags) }
+}
+
 impl FdGuard<false> {
     #[inline]
     pub fn new(fd: usize) -> Self {
@@ -710,7 +718,7 @@ impl FdGuard<false> {
 
     #[inline]
     pub fn open<T: AsRef<str>>(path: T, flags: usize) -> Result<Self> {
-        syscall::openat(0, path, flags, 0).map(Self::new)
+        legacy_open_for_fdguard(path.as_ref(), flags).map(Self::new)
     }
 
     #[inline]
@@ -1081,7 +1089,7 @@ pub fn new_child_process(args: &ForkArgs<'_>) -> Result<NewChildProc> {
 
 pub unsafe fn make_init() -> (&'static FdGuardUpper, &'static FdGuardUpper) {
     let proc_fd = FdGuard::new(
-        syscall::openat(0, "/scheme/proc/init", syscall::O_CLOEXEC, 0).expect("failed to create init"),
+        legacy_open_for_fdguard("/scheme/proc/init", syscall::O_CLOEXEC).expect("failed to create init"),
     )
     .to_upper()
     .unwrap();
