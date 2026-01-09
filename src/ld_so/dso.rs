@@ -1097,6 +1097,10 @@ impl DSO {
 
         self.lazy_relocate(&global_scope, resolve)?;
 
+        // Memory barrier to ensure relocation writes are visible before executing code.
+        // Required for aarch64 HVF which is strict about memory ordering.
+        core::sync::atomic::fence(core::sync::atomic::Ordering::Release);
+
         // Protect pages
         for ph in ph
             .iter()
