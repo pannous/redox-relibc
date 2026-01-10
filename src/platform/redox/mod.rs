@@ -1128,6 +1128,12 @@ impl Pal for Sys {
     }
 
     fn sync() -> Result<()> {
+        // Open root filesystem and call fsync to flush all buffers
+        // This triggers redoxfs to sync its write cache to the block device
+        if let Ok(fd) = syscall::open("/", syscall::O_RDONLY | syscall::O_DIRECTORY) {
+            let _ = syscall::fsync(fd);
+            let _ = syscall::close(fd);
+        }
         Ok(())
     }
 
