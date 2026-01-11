@@ -146,11 +146,9 @@ pub fn fexec_impl(
             PT_LOAD => {
                 let voff = segment.p_vaddr as usize % PAGE_SIZE;
                 let vaddr = segment.p_vaddr as usize - voff;
-                let foff = segment.p_offset as usize % PAGE_SIZE;
                 let filesz = segment.p_filesz as usize;
-                let memsz = segment.p_memsz as usize;
 
-                let total_page_count = (memsz + voff).div_ceil(PAGE_SIZE);
+                let total_page_count = (segment.p_memsz as usize + voff).div_ceil(PAGE_SIZE);
 
                 // The case where segments overlap so that they share one page, is not handled.
                 // TODO: Should it be?
@@ -159,82 +157,29 @@ pub fn fexec_impl(
                     return Err(Error::new(ENOEXEC));
                 }
 
-                // ELF spec requires the sub-page offset to match between vaddr and file offset
-                // for proper demand paging. If they don't match, fall back to read-based loading.
-                let use_file_mmap = voff == foff;
+                mmap_anon_remote(
+                    &grants_fd,
+                    0,
+                    vaddr,
+                    total_page_count * PAGE_SIZE,
+                    flags | MapFlags::MAP_FIXED_NOREPLACE,
+                )?;
 
-                // Helper closure for anonymous mmap + pread fallback
-                let do_pread_fallback = || -> Result<(), Error> {
-                    mmap_anon_remote(
-                        &grants_fd,
-                        0,
-                        vaddr,
-                        total_page_count * PAGE_SIZE,
-                        flags | MapFlags::MAP_FIXED_NOREPLACE,
+                // TODO: Attempt to mmap with MAP_PRIVATE directly from the image file instead.
+
+                if filesz > 0 {
+                    let (_guard, dst_memory) = unsafe {
+                        MmapGuard::map_mut_anywhere(
+                            &grants_fd,
+                            vaddr,                                       // offset
+                            (voff + filesz).next_multiple_of(PAGE_SIZE), // size
+                        )?
+                    };
+                    pread_all(
+                        &image_file,
+                        u64::from(segment.p_offset),
+                        &mut dst_memory[voff..voff + filesz],
                     )?;
-
-                    if filesz > 0 {
-                        let (_guard, dst_memory) = unsafe {
-                            MmapGuard::map_mut_anywhere(
-                                &grants_fd,
-                                vaddr,
-                                (voff + filesz).next_multiple_of(PAGE_SIZE),
-                            )?
-                        };
-                        pread_all(
-                            &image_file,
-                            u64::from(segment.p_offset),
-                            &mut dst_memory[voff..voff + filesz],
-                        )?;
-                    }
-                    Ok(())
-                };
-
-                if use_file_mmap {
-                    // Try file-backed mmap with MAP_PRIVATE for demand paging.
-                    // Pages are loaded from disk on first access, not upfront.
-                    let file_offset = segment.p_offset as usize - foff;
-                    let file_map_size = (filesz + voff).next_multiple_of(PAGE_SIZE);
-
-                    // Dup to a posix fd for mmap - kernel looks up in posix table
-                    let posix_fd = image_file.dup(b"")?;
-                    let mmap_result = mmap_file_remote(
-                        &grants_fd,
-                        posix_fd.as_raw_fd(),
-                        file_offset,
-                        vaddr,
-                        file_map_size,
-                        flags | MapFlags::MAP_FIXED_NOREPLACE | MapFlags::MAP_PRIVATE,
-                    );
-                    drop(posix_fd);
-
-                    match mmap_result {
-                        Ok(_) => {
-                            // BSS portion: allocate anonymous zeroed memory for memsz > filesz
-                            let bss_start = vaddr + file_map_size;
-                            let bss_size = total_page_count * PAGE_SIZE - file_map_size;
-                            if bss_size > 0 {
-                                mmap_anon_remote(
-                                    &grants_fd,
-                                    0,
-                                    bss_start,
-                                    bss_size,
-                                    flags | MapFlags::MAP_FIXED_NOREPLACE,
-                                )?;
-                            }
-                        }
-                        Err(e) if e.errno == syscall::EPERM || e.errno == syscall::EBADF => {
-                            // Scheme doesn't support file-backed mmap (initfs returns EPERM,
-                            // redoxfs may return EBADF). Fall back to pread.
-                            do_pread_fallback()?;
-                        }
-                        Err(e) => return Err(e),
-                    }
-                } else {
-                    // Fallback: allocate anonymous memory and read file content into it.
-                    // Used when file offset alignment doesn't match vaddr alignment,
-                    // or for pure BSS segments (filesz == 0).
-                    do_pread_fallback()?;
                 }
 
                 update_min_mmap_addr(vaddr, total_page_count * PAGE_SIZE);
@@ -559,35 +504,6 @@ pub fn mmap_anon_remote(
             // size
             len,
             // flags
-            flags.bits(),
-        ],
-    )
-}
-
-/// Map a file into a remote address space with MAP_PRIVATE (copy-on-write).
-/// This enables demand paging - pages are loaded from disk on first access.
-pub fn mmap_file_remote(
-    addrspace_fd: &FdGuardUpper,
-    file_fd: usize,
-    file_offset: usize,
-    dst_addr: usize,
-    len: usize,
-    flags: MapFlags,
-) -> Result<usize> {
-    write_usizes(
-        addrspace_fd,
-        [
-            // op
-            syscall::flag::ADDRSPACE_OP_MMAP,
-            // fd - the file to map
-            file_fd,
-            // offset into file
-            file_offset,
-            // address in target address space
-            dst_addr,
-            // size
-            len,
-            // flags (should include MAP_PRIVATE)
             flags.bits(),
         ],
     )
