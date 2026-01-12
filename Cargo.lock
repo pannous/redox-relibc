@@ -422,7 +422,7 @@ name = "redox-ioctl"
 version = "0.1.0"
 dependencies = [
  "drm-sys",
- "redox_syscall",
+ "redox_syscall 0.7.0",
 ]
 
 [[package]]
@@ -440,7 +440,7 @@ dependencies = [
  "goblin",
  "plain",
  "redox-path",
- "redox_syscall",
+ "redox_syscall 0.7.0",
 ]
 
 [[package]]
@@ -451,13 +451,22 @@ checksum = "f8eafe403549fab08a0c0862769493ad992625bb5a694aae2df6901e7e4fd05a"
 dependencies = [
  "bitflags",
  "libredox",
- "redox_syscall",
+ "redox_syscall 0.6.0",
 ]
 
 [[package]]
 name = "redox_syscall"
 version = "0.6.0"
 source = "git+https://gitlab.redox-os.org/redox-os/syscall.git?branch=master#1cf631ce3f36838ababdbd2b0190d93a6b64a31b"
+dependencies = [
+ "bitflags",
+]
+
+[[package]]
+name = "redox_syscall"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "49f3fe0889e69e2ae9e41f4d6c4c0181701d00e4697b356fb1f74173a5e0ee27"
 dependencies = [
  "bitflags",
 ]
@@ -491,7 +500,7 @@ dependencies = [
  "redox-path",
  "redox-rt",
  "redox_event",
- "redox_syscall",
+ "redox_syscall 0.6.0",
  "sc",
  "scrypt",
  "sha-crypt",
