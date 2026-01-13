@@ -84,9 +84,12 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
         let packet_data_len = packet_data.len();
         eprintln!("[DNS] packet len: {}", packet_data_len);
 
+        eprintln!("[DNS] boxing packet");
         let packet_data_box = packet_data.into_boxed_slice();
         let packet_data_ptr = Box::into_raw(packet_data_box) as *mut _ as *mut c_void;
+        eprintln!("[DNS] packet_data_ptr: {:?}", packet_data_ptr);
 
+        eprintln!("[DNS] creating sockaddr_in");
         let dest = sockaddr_in {
             sin_family: AF_INET as u16,
             sin_port: htons(53),
@@ -95,27 +98,38 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
         };
         let dest_ptr = &dest as *const _ as *const sockaddr;
 
+        eprintln!("[DNS] creating socket");
         let sock = unsafe {
             let sock = sys_socket::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP as i32);
+            eprintln!("[DNS] socket fd: {}", sock);
             if sys_socket::connect(sock, dest_ptr, mem::size_of_val(&dest) as socklen_t) < 0 {
+                eprintln!("[DNS] connect failed");
                 return Err(EIO);
             }
+            eprintln!("[DNS] connected");
             if sys_socket::send(sock, packet_data_ptr, packet_data_len, 0) < 0 {
+                eprintln!("[DNS] send failed");
                 Box::from_raw(packet_data_ptr);
                 return Err(EIO);
             }
+            eprintln!("[DNS] sent {} bytes", packet_data_len);
             sock
         };
 
+        eprintln!("[DNS] freeing packet_data_ptr");
         unsafe {
             Box::from_raw(packet_data_ptr);
         }
 
+        eprintln!("[DNS] allocating recv buffer");
         let i = 0 as socklen_t;
         let mut buf = vec![0u8; 65536];
         let buf_ptr = buf.as_mut_ptr() as *mut c_void;
+        eprintln!("[DNS] buf_ptr: {:?}", buf_ptr);
 
+        eprintln!("[DNS] calling recv");
         let count = unsafe { sys_socket::recv(sock, buf_ptr, 65536, 0) };
+        eprintln!("[DNS] recv returned: {}", count);
         if count < 0 {
             return Err(EIO);
         }
