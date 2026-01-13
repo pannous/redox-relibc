@@ -43,12 +43,16 @@ impl From<u32> for LookupHost {
 }
 
 pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
+    eprintln!("[DNS] lookup_host: {}", host);
     if let Some(host_direct_addr) = parse_ipv4_string(host) {
         // already an ip address
+        eprintln!("[DNS] already IP address");
         return Ok(host_direct_addr.into());
     }
 
+    eprintln!("[DNS] getting DNS server");
     let dns_string = get_dns_server().map_err(|e| e.0)?;
+    eprintln!("[DNS] DNS server: {}", dns_string.trim());
 
     if let Some(dns_addr) = parse_ipv4_string(&dns_string) {
         let mut timespec = timespec::default();
