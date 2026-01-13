@@ -61,9 +61,11 @@ pub unsafe extern "C" fn redox_event_queue_ctl_v1(
             queue,
             &syscall::Event {
                 id: fd,
-                flags: event::raw::EventFlags::from_bits(flags)
-                    .ok_or(Error::new(EINVAL))?
-                    .into(),
+                flags: syscall::EventFlags::from_bits_retain(
+                    syscall::flag::EventFlags::from(
+                        event::raw::EventFlags::from_bits(flags).ok_or(Error::new(EINVAL))?
+                    ).bits()
+                ),
                 data: user_data,
             },
         )?;
