@@ -43,31 +43,31 @@ impl From<u32> for LookupHost {
 }
 
 pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
-    eprintln!("[DNS] lookup_host: {}", host);
+    trace!("[DNS] lookup_host: {}", host);
     if let Some(host_direct_addr) = parse_ipv4_string(host) {
         // already an ip address
-        eprintln!("[DNS] already IP address");
+        trace!("[DNS] already IP address");
         return Ok(host_direct_addr.into());
     }
 
-    eprintln!("[DNS] getting DNS server");
+    trace!("[DNS] getting DNS server");
     let dns_string = get_dns_server().map_err(|e| e.0)?;
-    eprintln!("[DNS] DNS server: {}", dns_string.trim());
+    trace!("[DNS] DNS server: {}", dns_string.trim());
 
     if let Some(dns_addr) = parse_ipv4_string(&dns_string) {
-        eprintln!("[DNS] parsed DNS addr: 0x{:08x}", dns_addr);
+        trace!("[DNS] parsed DNS addr: 0x{:08x}", dns_addr);
         let mut timespec = timespec::default();
-        eprintln!("[DNS] calling clock_gettime");
+        trace!("[DNS] calling clock_gettime");
         unsafe {
             Sys::clock_gettime(
                 time::constants::CLOCK_REALTIME,
                 Out::from_mut(&mut timespec),
             );
         }
-        eprintln!("[DNS] clock_gettime done");
+        trace!("[DNS] clock_gettime done");
         let tid = (timespec.tv_nsec >> 16) as u16;
 
-        eprintln!("[DNS] building DNS packet");
+        trace!("[DNS] building DNS packet");
         let packet = Dns {
             transaction_id: tid,
             flags: 0x0100,
@@ -79,17 +79,17 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
             answers: vec![],
         };
 
-        eprintln!("[DNS] compiling packet");
+        trace!("[DNS] compiling packet");
         let packet_data = packet.compile();
         let packet_data_len = packet_data.len();
-        eprintln!("[DNS] packet len: {}", packet_data_len);
+        trace!("[DNS] packet len: {}", packet_data_len);
 
-        eprintln!("[DNS] boxing packet");
+        trace!("[DNS] boxing packet");
         let packet_data_box = packet_data.into_boxed_slice();
         let packet_data_ptr = Box::into_raw(packet_data_box) as *mut _ as *mut c_void;
-        eprintln!("[DNS] packet_data_ptr: {:?}", packet_data_ptr);
+        trace!("[DNS] packet_data_ptr: {:?}", packet_data_ptr);
 
-        eprintln!("[DNS] creating sockaddr_in");
+        trace!("[DNS] creating sockaddr_in");
         let dest = sockaddr_in {
             sin_family: AF_INET as u16,
             sin_port: htons(53),
@@ -98,38 +98,38 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
         };
         let dest_ptr = &dest as *const _ as *const sockaddr;
 
-        eprintln!("[DNS] creating socket");
+        trace!("[DNS] creating socket");
         let sock = unsafe {
             let sock = sys_socket::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP as i32);
-            eprintln!("[DNS] socket fd: {}", sock);
+            trace!("[DNS] socket fd: {}", sock);
             if sys_socket::connect(sock, dest_ptr, mem::size_of_val(&dest) as socklen_t) < 0 {
-                eprintln!("[DNS] connect failed");
+                trace!("[DNS] connect failed");
                 return Err(EIO);
             }
-            eprintln!("[DNS] connected");
+            trace!("[DNS] connected");
             if sys_socket::send(sock, packet_data_ptr, packet_data_len, 0) < 0 {
-                eprintln!("[DNS] send failed");
+                trace!("[DNS] send failed");
                 Box::from_raw(packet_data_ptr);
                 return Err(EIO);
             }
-            eprintln!("[DNS] sent {} bytes", packet_data_len);
+            trace!("[DNS] sent {} bytes", packet_data_len);
             sock
         };
 
-        eprintln!("[DNS] freeing packet_data_ptr");
+        trace!("[DNS] freeing packet_data_ptr");
         unsafe {
             Box::from_raw(packet_data_ptr);
         }
 
-        eprintln!("[DNS] allocating recv buffer");
+        trace!("[DNS] allocating recv buffer");
         let i = 0 as socklen_t;
         let mut buf = vec![0u8; 65536];
         let buf_ptr = buf.as_mut_ptr() as *mut c_void;
-        eprintln!("[DNS] buf_ptr: {:?}", buf_ptr);
+        trace!("[DNS] buf_ptr: {:?}", buf_ptr);
 
-        eprintln!("[DNS] calling recv");
+        trace!("[DNS] calling recv");
         let count = unsafe { sys_socket::recv(sock, buf_ptr, 65536, 0) };
-        eprintln!("[DNS] recv returned: {}", count);
+        trace!("[DNS] recv returned: {}", count);
         if count < 0 {
             return Err(EIO);
         }
