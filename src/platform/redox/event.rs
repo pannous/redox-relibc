@@ -42,7 +42,7 @@ pub unsafe extern "C" fn redox_event_queue_get_events_v1(
         );
         buf.write(event::raw::RawEventV1 {
             fd: event.id,
-            flags: event::raw::EventFlags::from(event.flags).bits(),
+            flags: event::raw::EventFlags::from(syscall::flag::EventFlags::from_bits_retain(event.flags.bits())).bits(),
             user_data: event.data,
         });
 
