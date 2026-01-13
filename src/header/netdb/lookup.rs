@@ -55,15 +55,19 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
     eprintln!("[DNS] DNS server: {}", dns_string.trim());
 
     if let Some(dns_addr) = parse_ipv4_string(&dns_string) {
+        eprintln!("[DNS] parsed DNS addr: 0x{:08x}", dns_addr);
         let mut timespec = timespec::default();
+        eprintln!("[DNS] calling clock_gettime");
         unsafe {
             Sys::clock_gettime(
                 time::constants::CLOCK_REALTIME,
                 Out::from_mut(&mut timespec),
             );
         }
+        eprintln!("[DNS] clock_gettime done");
         let tid = (timespec.tv_nsec >> 16) as u16;
 
+        eprintln!("[DNS] building DNS packet");
         let packet = Dns {
             transaction_id: tid,
             flags: 0x0100,
@@ -75,8 +79,10 @@ pub fn lookup_host(host: &str) -> Result<LookupHost, c_int> {
             answers: vec![],
         };
 
+        eprintln!("[DNS] compiling packet");
         let packet_data = packet.compile();
         let packet_data_len = packet_data.len();
+        eprintln!("[DNS] packet len: {}", packet_data_len);
 
         let packet_data_box = packet_data.into_boxed_slice();
         let packet_data_ptr = Box::into_raw(packet_data_box) as *mut _ as *mut c_void;
