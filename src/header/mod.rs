@@ -38,7 +38,7 @@ pub mod libgen;
 pub mod limits;
 pub mod locale;
 pub mod malloc;
-// math.h implemented in C
+pub mod math; // Pure Rust math via libm
 pub mod monetary;
 // TODO: mqueue.h
 // TODO: ndbm.h
