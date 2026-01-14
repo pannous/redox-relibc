@@ -19,7 +19,8 @@ use crate::{
             EAFNOSUPPORT, EDOM, EFAULT, EINVAL, EISCONN, EMSGSIZE, ENOMEM, ENOSYS, ENOTSOCK,
             EOPNOTSUPP, EPROTONOSUPPORT,
         },
-        netinet_in::{in_addr, in_port_t, sockaddr_in},
+        netinet_in::{in_addr, in_port_t, sockaddr_in, IPPROTO_TCP},
+        netinet_tcp::TCP_NODELAY,
         string::strnlen,
         sys_socket::{
             CMSG_ALIGN, CMSG_DATA, CMSG_FIRSTHDR, CMSG_LEN, CMSG_NXTHDR, CMSG_SPACE, cmsghdr,
@@ -1001,11 +1002,28 @@ impl PalSocket for Sys {
                     return Ok(());
                 }
             },
+            // IPPROTO_TCP options - TCP_NODELAY etc.
+            // Silently accept these as Redox TCP doesn't implement Nagle's algorithm
+            level if level == IPPROTO_TCP as c_int => match option_name {
+                TCP_NODELAY => {
+                    // TCP_NODELAY disables Nagle's algorithm. Redox's TCP stack
+                    // doesn't buffer small packets, so this is effectively always on.
+                    return Ok(());
+                }
+                _ => {
+                    // Unknown TCP option - log but don't fail
+                    eprintln!(
+                        "setsockopt: ignoring unknown TCP option {} on socket {}",
+                        option_name, socket
+                    );
+                    return Ok(());
+                }
+            },
             _ => (),
         }
 
         eprintln!(
-            "setsockopt({}, {}, {}, {:p}, {}) - unknown option",
+            "setsockopt({}, {}, {}, {:p}, {}) - unknown level/option",
             socket, level, option_name, option_value, option_len
         );
         Ok(())

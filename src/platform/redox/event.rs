@@ -42,7 +42,8 @@ pub unsafe extern "C" fn redox_event_queue_get_events_v1(
         );
         buf.write(event::raw::RawEventV1 {
             fd: event.id,
-            flags: event::raw::EventFlags::from(syscall::flag::EventFlags::from_bits_retain(event.flags.bits())).bits(),
+            // Convert syscall EventFlags bits to event::raw::EventFlags bits directly
+            flags: event.flags.bits() as u32,
             user_data: event.data,
         });
 
@@ -57,15 +58,13 @@ pub unsafe extern "C" fn redox_event_queue_ctl_v1(
     user_data: usize,
 ) -> RawResult {
     Error::mux((|| -> Result<usize> {
+        // Convert u32 flags to syscall EventFlags
+        // The flag bits have the same meaning across both types
         let res = syscall::write(
             queue,
             &syscall::Event {
                 id: fd,
-                flags: syscall::EventFlags::from_bits_retain(
-                    syscall::flag::EventFlags::from(
-                        event::raw::EventFlags::from_bits(flags).ok_or(Error::new(EINVAL))?
-                    ).bits()
-                ),
+                flags: syscall::EventFlags::from_bits_retain(flags as usize),
                 data: user_data,
             },
         )?;
