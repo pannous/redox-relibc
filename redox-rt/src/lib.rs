@@ -8,7 +8,7 @@ use core::{
     mem::{MaybeUninit, size_of},
 };
 
-use generic_rt::{ExpectTlsFree, GenericTcb};
+use generic_rt::GenericTcb;
 use syscall::Sigcontrol;
 
 use self::{

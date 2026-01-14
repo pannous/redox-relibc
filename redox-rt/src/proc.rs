@@ -970,14 +970,14 @@ pub fn fork_inner(initial_rsp: *mut usize, args: &ForkArgs) -> Result<usize> {
             ))]
             let buf = create_set_addr_space_buf_for_fork(
                 new_addr_space_fd.as_raw_fd(),
-                __relibc_internal_fork_ret as usize,
+                __relibc_internal_fork_ret as *const () as usize,
                 initial_rsp as usize,
                 arg1,
             );
             #[cfg(target_arch = "x86")]
             let buf = create_set_addr_space_buf(
                 new_addr_space_fd.as_raw_fd(),
-                __relibc_internal_fork_ret as usize,
+                __relibc_internal_fork_ret as *const () as usize,
                 initial_rsp as usize,
             );
             new_addr_space_sel_fd.write(&buf)?;
@@ -1061,7 +1061,7 @@ pub fn new_child_process(args: &ForkArgs<'_>) -> Result<NewChildProc> {
         ForkArgs::Init { .. } => unreachable!(),
 
         #[cfg(not(feature = "proc"))]
-        ForkArgs::Init { this_thr_fd, auth } => {
+        ForkArgs::Init { this_thr_fd: _, auth } => {
             let thr_fd = auth.dup(b"new-context")?.to_upper()?;
             let buf = syscall::ProcSchemeAttrs {
                 pid: 0,
