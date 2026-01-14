@@ -6,7 +6,7 @@ use crate::{
     Tcb,
     proc::{FdGuard, FdGuardUpper, ForkArgs, fork_inner},
     protocol::{ProcCall, RtSigInfo},
-    signal::{PosixStackt, SigStack, inner_c},
+    signal::{PosixStackt, RtSigarea, SigStack, inner_c},
 };
 
 use super::ForkScratchpad;
