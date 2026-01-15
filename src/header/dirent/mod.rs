@@ -39,6 +39,9 @@ pub struct DIR {
 
     // The last value of d_off, used by telldir
     opaque_offset: u64,
+
+    // Aligned buffer for returning dirent - ensures proper alignment for d_ino (u64)
+    aligned_dirent: dirent,
 }
 impl DIR {
     pub fn new(path: CStr) -> Result<Box<Self>, Errno> {
@@ -50,6 +53,7 @@ impl DIR {
             buf: Vec::with_capacity(INITIAL_BUFSIZE),
             buf_offset: 0,
             opaque_offset: 0,
+            aligned_dirent: unsafe { mem::zeroed() },
         }))
     }
     pub fn from_fd(fd: c_int) -> Result<Box<Self>, Errno> {
@@ -69,6 +73,7 @@ impl DIR {
             buf: Vec::with_capacity(INITIAL_BUFSIZE),
             buf_offset: 0,
             opaque_offset: 0,
+            aligned_dirent: unsafe { mem::zeroed() },
         }
         .into())
     }
@@ -113,11 +118,21 @@ impl DIR {
             // Don't want memory corruption if a scheme is adversarial.
             return Err(Errno(EIO));
         }
-        let dent_ptr = this_dent.as_ptr() as *mut dirent;
+
+        // Copy to aligned buffer to ensure proper alignment for d_ino (u64) access.
+        // The raw buffer from getdents may not be properly aligned.
+        let copy_len = usize::from(this_reclen).min(mem::size_of::<dirent>());
+        unsafe {
+            ptr::copy_nonoverlapping(
+                this_dent.as_ptr(),
+                &mut self.aligned_dirent as *mut dirent as *mut u8,
+                copy_len,
+            );
+        }
 
         self.opaque_offset = this_next_opaque;
         self.buf_offset = next_off;
-        Ok(dent_ptr)
+        Ok(&mut self.aligned_dirent as *mut dirent)
     }
     fn seek(&mut self, off: u64) {
         let Ok(_) = Sys::dir_seek(*self.file, off) else {
