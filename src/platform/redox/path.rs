@@ -46,21 +46,27 @@ pub fn chdir(path: &str) -> Result<()> {
     }
     let _ = syscall::close(fd);
 
-    // Extract canonical path from fpath result (strip scheme prefix for CWD)
+    // Extract canonical path from fpath result
     let resolved_path = core::str::from_utf8(&path_buf[..path_len])
         .map_err(|_| Error::new(ENOENT))?;
 
-    // Strip /scheme/file prefix if present to get canonical user-visible path
-    let canon = if let Some(stripped) = resolved_path.strip_prefix("/scheme/file") {
-        if stripped.is_empty() { "/" } else { stripped }
-    } else if let Some(stripped) = resolved_path.strip_prefix("/scheme/") {
-        // For other schemes like 9p.hostshare, keep the /scheme/ prefix
-        resolved_path
+    // Convert fpath result to canonical user-visible path
+    // fpath returns paths like "/schemename/path" but users expect "/scheme/schemename/path"
+    let canon: String = if resolved_path.starts_with("/scheme/file/") || resolved_path == "/scheme/file" {
+        // /scheme/file/path -> /path (default file scheme)
+        let stripped = resolved_path.strip_prefix("/scheme/file").unwrap_or("/");
+        if stripped.is_empty() { "/".to_string() } else { stripped.to_string() }
+    } else if resolved_path.starts_with("/scheme/") {
+        // Already in /scheme/name format
+        resolved_path.to_string()
+    } else if resolved_path.starts_with("/") && !resolved_path.starts_with("/scheme") {
+        // fpath returned /schemename/path, convert to /scheme/schemename/path
+        format!("/scheme{}", resolved_path)
     } else {
-        resolved_path
+        resolved_path.to_string()
     };
 
-    *cwd_guard = Some(canon.to_string().into_boxed_str());
+    *cwd_guard = Some(canon.into_boxed_str());
 
     Ok(())
 }
