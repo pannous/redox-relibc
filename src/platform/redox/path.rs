@@ -29,17 +29,38 @@ pub fn chdir(path: &str) -> Result<()> {
     let _siglock = tmp_disable_signals();
     let mut cwd_guard = CWD.lock();
 
-    let canon = canonicalize_using_cwd(cwd_guard.as_deref(), path).ok_or(Error::new(ENOENT))?;
-    let canon_with_scheme = canonicalize_with_cwd_internal(cwd_guard.as_deref(), path)?;
+    // Use open_with_cwd to follow symlinks (handles EXDEV for cross-scheme symlinks)
+    let fd = open_with_cwd(cwd_guard.as_deref(), path, O_STAT | O_CLOEXEC)?;
 
-    let fd = syscall::open(&canon_with_scheme, O_STAT | O_CLOEXEC)?;
+    // Get the final resolved path from fpath
+    let mut path_buf = [0u8; PATH_MAX];
+    let path_len = syscall::fpath(fd, &mut path_buf).map_err(|e| {
+        let _ = syscall::close(fd);
+        e
+    })?;
+
     let mut stat = Stat::default();
     if syscall::fstat(fd, &mut stat).is_err() || (stat.st_mode & MODE_TYPE) != MODE_DIR {
+        let _ = syscall::close(fd);
         return Err(Error::new(ENOTDIR));
     }
     let _ = syscall::close(fd);
 
-    *cwd_guard = Some(canon.into_boxed_str());
+    // Extract canonical path from fpath result (strip scheme prefix for CWD)
+    let resolved_path = core::str::from_utf8(&path_buf[..path_len])
+        .map_err(|_| Error::new(ENOENT))?;
+
+    // Strip /scheme/file prefix if present to get canonical user-visible path
+    let canon = if let Some(stripped) = resolved_path.strip_prefix("/scheme/file") {
+        if stripped.is_empty() { "/" } else { stripped }
+    } else if let Some(stripped) = resolved_path.strip_prefix("/scheme/") {
+        // For other schemes like 9p.hostshare, keep the /scheme/ prefix
+        resolved_path
+    } else {
+        resolved_path
+    };
+
+    *cwd_guard = Some(canon.to_string().into_boxed_str());
 
     Ok(())
 }
@@ -102,8 +123,9 @@ pub fn clone_cwd() -> Option<Box<str>> {
     CWD.lock().clone()
 }
 
-// TODO: Move to redox-rt, or maybe part of it?
-pub fn open(path: &str, flags: usize) -> Result<usize> {
+// Internal helper for symlink-following open. Takes CWD as parameter to avoid deadlock when
+// called from chdir (which already holds the CWD lock).
+fn open_with_cwd(cwd: Option<&str>, path: &str, flags: usize) -> Result<usize> {
     // TODO: SYMLOOP_MAX
     const MAX_LEVEL: usize = 64;
 
@@ -111,7 +133,7 @@ pub fn open(path: &str, flags: usize) -> Result<usize> {
     let mut path = path;
 
     for _ in 0..MAX_LEVEL {
-        let canon = canonicalize_with_cwd_internal(CWD.lock().as_deref(), path)?;
+        let canon = canonicalize_with_cwd_internal(cwd, path)?;
 
         let open_res = if canon.starts_with(libcscheme::LIBC_SCHEME) {
             libcscheme::open(&canon, flags)
@@ -140,6 +162,11 @@ pub fn open(path: &str, flags: usize) -> Result<usize> {
         }
     }
     Err(Error::new(ELOOP))
+}
+
+// TODO: Move to redox-rt, or maybe part of it?
+pub fn open(path: &str, flags: usize) -> Result<usize> {
+    open_with_cwd(CWD.lock().as_deref(), path, flags)
 }
 
 pub fn dir_path_and_fd_path(socket_path: &str) -> Result<(String, String)> {
