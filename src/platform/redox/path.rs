@@ -136,38 +136,101 @@ fn open_with_cwd(cwd: Option<&str>, path: &str, flags: usize) -> Result<usize> {
     const MAX_LEVEL: usize = 64;
 
     let mut resolve_buf = [0_u8; 4096];
-    let mut path = path;
+    let mut current_path = canonicalize_with_cwd_internal(cwd, path)?;
 
     for _ in 0..MAX_LEVEL {
-        let canon = canonicalize_with_cwd_internal(cwd, path)?;
-
-        let open_res = if canon.starts_with(libcscheme::LIBC_SCHEME) {
-            libcscheme::open(&canon, flags)
+        let open_res = if current_path.starts_with(libcscheme::LIBC_SCHEME) {
+            libcscheme::open(&current_path, flags)
         } else {
-            syscall::open(&*canon, flags)
+            syscall::open(&*current_path, flags)
         };
 
         match open_res {
             Ok(fd) => return Ok(fd),
             Err(error) if error == Error::new(EXDEV) => {
+                // EXDEV means a cross-scheme symlink was encountered. It could be:
+                // 1. The final component is a symlink (old behavior)
+                // 2. An intermediate component is a cross-scheme symlink (new case)
+                //
+                // First try the old approach: open the full path with O_SYMLINK
                 let resolve_flags = O_CLOEXEC | O_SYMLINK | O_RDONLY;
-                let resolve_fd = FdGuard::new(syscall::open(&*canon, resolve_flags)?);
-
-                let bytes_read = resolve_fd.read(&mut resolve_buf)?;
-                // TODO: make resolve_buf PATH_MAX + 1 bytes?
-                if bytes_read == resolve_buf.len() {
-                    return Err(Error::new(ENAMETOOLONG));
+                match syscall::open(&*current_path, resolve_flags) {
+                    Ok(fd) => {
+                        // Final component is the symlink
+                        let resolve_fd = FdGuard::new(fd);
+                        let bytes_read = resolve_fd.read(&mut resolve_buf)?;
+                        if bytes_read == resolve_buf.len() {
+                            return Err(Error::new(ENAMETOOLONG));
+                        }
+                        current_path = core::str::from_utf8(&resolve_buf[..bytes_read])
+                            .map_err(|_| Error::new(ENOENT))?
+                            .to_string();
+                    }
+                    Err(_) => {
+                        // Intermediate component is the cross-scheme symlink
+                        // Find which component by walking the path
+                        current_path = resolve_intermediate_symlink(&current_path, &mut resolve_buf)?;
+                    }
                 }
-
-                // If the symbolic link path is non-UTF8, it cannot be opened, and is thus
-                // considered a "dangling symbolic link".
-                path = core::str::from_utf8(&resolve_buf[..bytes_read])
-                    .map_err(|_| Error::new(ENOENT))?;
             }
             Err(other_error) => return Err(other_error),
         }
     }
     Err(Error::new(ELOOP))
+}
+
+/// Find and resolve an intermediate cross-scheme symlink in the path.
+/// Returns the path with the symlink target substituted.
+fn resolve_intermediate_symlink(path: &str, buf: &mut [u8]) -> Result<String> {
+    // Parse path: /scheme/name/a/b/c -> scheme=name, components=[a,b,c]
+    let path = path.strip_prefix("/scheme/").ok_or(Error::new(EINVAL))?;
+    let (scheme_name, ref_path) = path.split_once('/').ok_or(Error::new(EINVAL))?;
+
+    let scheme_prefix = format!("/scheme/{}", scheme_name);
+    let components: Vec<&str> = ref_path.split('/').filter(|s| !s.is_empty()).collect();
+
+    // Try opening progressively longer prefixes to find the cross-scheme symlink
+    let mut good_prefix = scheme_prefix.clone();
+
+    for (i, component) in components.iter().enumerate() {
+        let test_path = format!("{}/{}", good_prefix, component);
+
+        // Try to stat this path component
+        match syscall::open(&test_path, O_CLOEXEC | O_STAT) {
+            Ok(fd) => {
+                let _ = syscall::close(fd);
+                good_prefix = test_path;
+            }
+            Err(e) if e == Error::new(EXDEV) => {
+                // Found the cross-scheme symlink component
+                // Open it with O_SYMLINK to read the target
+                let resolve_flags = O_CLOEXEC | O_SYMLINK | O_RDONLY;
+                let fd = syscall::open(&test_path, resolve_flags)?;
+                let resolve_fd = FdGuard::new(fd);
+                let bytes_read = resolve_fd.read(buf)?;
+                if bytes_read == buf.len() {
+                    return Err(Error::new(ENAMETOOLONG));
+                }
+
+                let symlink_target = core::str::from_utf8(&buf[..bytes_read])
+                    .map_err(|_| Error::new(ENOENT))?;
+
+                // Reconstruct the path: symlink_target + remaining components
+                let remaining: Vec<&str> = components[i + 1..].to_vec();
+                let new_path = if remaining.is_empty() {
+                    symlink_target.to_string()
+                } else {
+                    format!("{}/{}", symlink_target.trim_end_matches('/'), remaining.join("/"))
+                };
+
+                return Ok(new_path);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Shouldn't reach here if EXDEV was returned for the full path
+    Err(Error::new(ENOENT))
 }
 
 // TODO: Move to redox-rt, or maybe part of it?
