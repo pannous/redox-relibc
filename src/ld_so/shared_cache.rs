@@ -614,6 +614,11 @@ static SHARED_CACHE: CacheHolder = CacheHolder(UnsafeCell::new(None));
 
 /// Initialize the shared cache (call once at linker startup).
 pub fn init_shared_cache() {
+    // DISABLED: Shared cache causes hang at getty - needs debugging
+    // The MAP_SHARED mmap or file creation may be blocking
+    return;
+
+    #[allow(unreachable_code)]
     unsafe {
         if (*SHARED_CACHE.0.get()).is_none() {
             if let Some(mut cache) = SharedCache::open() {
