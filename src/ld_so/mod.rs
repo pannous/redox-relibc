@@ -26,6 +26,7 @@ pub mod callbacks;
 pub mod debug;
 mod dso;
 pub mod linker;
+pub mod shared_cache;
 pub mod start;
 pub mod tcb;
 
