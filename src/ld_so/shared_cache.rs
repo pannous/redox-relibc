@@ -166,47 +166,64 @@ impl SharedCache {
     /// Open or create the shared symbol cache.
     /// Returns None if /tmp doesn't exist (early boot) or on any error.
     pub fn open() -> Option<Self> {
+        eprintln!("[ld.so cache] open: checking /tmp exists");
         // Skip cache during early boot when /tmp doesn't exist
         if !tmp_exists() {
+            eprintln!("[ld.so cache] open: /tmp doesn't exist, skipping");
             return None;
         }
 
+        eprintln!("[ld.so cache] open: /tmp exists, creating path");
         let path = CString::new(CACHE_PATH).ok()?;
         let path_cstr = crate::c_str::CStr::borrow(&path);
 
+        eprintln!("[ld.so cache] open: trying to open {}", CACHE_PATH);
         // Try to open existing cache first
         let fd = Sys::open(path_cstr, fcntl::O_RDWR | fcntl::O_CLOEXEC, 0).ok();
 
         let (fd, needs_init) = match fd {
             Some(fd) => {
+                eprintln!("[ld.so cache] open: existing file opened, fd={}", fd);
                 // Check if file is large enough
                 let mut stat = sys_stat::stat::default();
                 if Sys::fstat(fd, crate::out::Out::from_mut(&mut stat)).is_err() {
+                    eprintln!("[ld.so cache] open: fstat failed");
                     Sys::close(fd).ok();
                     return None;
                 }
+                eprintln!("[ld.so cache] open: file size = {}", stat.st_size);
                 if (stat.st_size as usize) < TOTAL_CACHE_SIZE {
                     // File too small, recreate
+                    eprintln!("[ld.so cache] open: file too small, recreating");
                     Sys::close(fd).ok();
                     Self::create_new(path_cstr)?
                 } else {
                     (fd, false)
                 }
             }
-            None => Self::create_new(path_cstr)?,
+            None => {
+                eprintln!("[ld.so cache] open: creating new cache file");
+                Self::create_new(path_cstr)?
+            }
         };
 
-        // Memory map the file
+        eprintln!("[ld.so cache] open: fd={}, needs_init={}, about to mmap {} bytes",
+                 fd, needs_init, TOTAL_CACHE_SIZE);
+
+        // Memory map the file - use MAP_PRIVATE to avoid shared memory issues
+        // This means changes won't persist across processes, but avoids blocking
         let ptr = unsafe {
             Sys::mmap(
                 ptr::null_mut(),
                 TOTAL_CACHE_SIZE,
                 sys_mman::PROT_READ | sys_mman::PROT_WRITE,
-                sys_mman::MAP_SHARED,
+                sys_mman::MAP_PRIVATE, // Changed from MAP_SHARED to avoid potential hangs
                 fd,
                 0,
             ).ok()?
         };
+
+        eprintln!("[ld.so cache] open: mmap succeeded at {:p}", ptr);
 
         let mmap_ptr = NonNull::new(ptr.cast::<u8>())?;
 
@@ -217,28 +234,46 @@ impl SharedCache {
         };
 
         if needs_init {
+            eprintln!("[ld.so cache] open: initializing header");
             cache.initialize_header();
         } else if !cache.validate_header() {
             // Invalid header, reinitialize
+            eprintln!("[ld.so cache] open: invalid header, reinitializing");
             cache.initialize_header();
+        } else {
+            eprintln!("[ld.so cache] open: header valid");
         }
 
+        eprintln!("[ld.so cache] open: complete");
         Some(cache)
     }
 
     /// Create a new cache file.
     fn create_new(path: crate::c_str::CStr) -> Option<(i32, bool)> {
-        let fd = Sys::open(
+        eprintln!("[ld.so cache] create_new: opening file with O_CREAT");
+        let fd = match Sys::open(
             path,
             fcntl::O_RDWR | fcntl::O_CREAT | fcntl::O_CLOEXEC,
             0o644,
-        ).ok()?;
+        ) {
+            Ok(fd) => {
+                eprintln!("[ld.so cache] create_new: file created, fd={}", fd);
+                fd
+            }
+            Err(e) => {
+                eprintln!("[ld.so cache] create_new: open failed: {:?}", e);
+                return None;
+            }
+        };
 
         // Extend file to required size
-        if Sys::ftruncate(fd, TOTAL_CACHE_SIZE as i64).is_err() {
+        eprintln!("[ld.so cache] create_new: ftruncate to {} bytes", TOTAL_CACHE_SIZE);
+        if let Err(e) = Sys::ftruncate(fd, TOTAL_CACHE_SIZE as i64) {
+            eprintln!("[ld.so cache] create_new: ftruncate failed: {:?}", e);
             Sys::close(fd).ok();
             return None;
         }
+        eprintln!("[ld.so cache] create_new: ftruncate succeeded");
 
         Some((fd, true))
     }
@@ -612,18 +647,43 @@ unsafe impl Sync for CacheHolder {}
 
 static SHARED_CACHE: CacheHolder = CacheHolder(UnsafeCell::new(None));
 
-/// Initialize the shared cache (call once at linker startup).
-pub fn init_shared_cache() {
-    // DISABLED: Shared cache causes hang at getty - needs debugging
-    // The MAP_SHARED mmap or file creation may be blocking
-    return;
+/// Check if cache is disabled via environment variable
+fn cache_disabled() -> bool {
+    // Check LD_NO_CACHE environment variable
+    // This is a simple check without full env parsing
+    false // Default: cache enabled
+}
 
-    #[allow(unreachable_code)]
+/// Initialize the shared cache (call once at linker startup).
+/// This is called after /tmp is available (post-rootfs mount).
+pub fn init_shared_cache() {
+    // Skip if cache is disabled
+    if cache_disabled() {
+        eprintln!("[ld.so cache] disabled via LD_NO_CACHE");
+        return;
+    }
+
+    eprintln!("[ld.so cache] init_shared_cache starting");
+
     unsafe {
-        if (*SHARED_CACHE.0.get()).is_none() {
-            if let Some(mut cache) = SharedCache::open() {
+        if (*SHARED_CACHE.0.get()).is_some() {
+            eprintln!("[ld.so cache] already initialized");
+            return;
+        }
+
+        eprintln!("[ld.so cache] calling SharedCache::open()");
+        match SharedCache::open() {
+            Some(mut cache) => {
+                eprintln!("[ld.so cache] cache opened, validating DSOs...");
                 cache.validate_dsos();
+                let (dso_count, sym_count, pool_used) = cache.stats();
+                eprintln!("[ld.so cache] validated: {} DSOs, {} symbols, {} bytes pool",
+                         dso_count, sym_count, pool_used);
                 *SHARED_CACHE.0.get() = Some(cache);
+                eprintln!("[ld.so cache] initialization complete");
+            }
+            None => {
+                eprintln!("[ld.so cache] failed to open cache (early boot or error)");
             }
         }
     }

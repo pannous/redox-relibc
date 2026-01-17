@@ -27,6 +27,7 @@ use super::{
     access::accessible,
     debug::_r_debug,
     linker::{Config, Linker},
+    shared_cache::init_shared_cache,
     tcb::Tcb,
 };
 
@@ -268,6 +269,10 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         }
         base
     };
+
+    // Initialize symbol cache (skipped if /tmp doesn't exist yet)
+    init_shared_cache();
+
     let mut linker = Linker::new(Config::from_env(&envs));
     let entry = match linker.load_program(&path, base_addr) {
         Ok(entry) => {
