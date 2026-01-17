@@ -20,7 +20,7 @@ use crate::{
     error::Errno,
     header::{
         dl_tls::{__tls_get_addr, dl_tls_index},
-        fcntl, sys_mman, sys_stat,
+        fcntl, sys_mman,
         unistd::F_OK,
     },
     ld_so::dso::{SymbolBinding, resolve_sym},
@@ -38,7 +38,6 @@ use super::{
     callbacks::LinkerCallbacks,
     debug::{_dl_debug_state, _r_debug, RTLDState},
     dso::{DSO, ProgramHeader, Rela},
-    shared_cache::{cache_insert, cache_lookup, cache_register_dso, init_shared_cache},
     tcb::{Master, Tcb},
 };
 
@@ -466,9 +465,6 @@ const ROOT_ID: usize = 1;
 
 impl Linker {
     pub fn new(config: Config) -> Self {
-        // NOTE: Shared symbol cache disabled - causes boot issues
-        // init_shared_cache();
-
         Self {
             config,
             next_object_id: ROOT_ID,
@@ -1007,22 +1003,6 @@ impl Linker {
         })?;
 
         Ok(file)
-    }
-
-    /// Get file stat info (mtime, inode, dev) for shared cache registration.
-    fn stat_file(&self, path: &str) -> Option<(i64, u64, u64)> {
-        let path_c = CString::new(path).ok()?;
-
-        // Open file to get stat info (using fstat since stat isn't directly available)
-        let fd = Sys::open(CStr::borrow(&path_c), fcntl::O_RDONLY | fcntl::O_CLOEXEC, 0).ok()?;
-
-        let mut stat = sys_stat::stat::default();
-        let result = Sys::fstat(fd, Out::from_mut(&mut stat));
-        Sys::close(fd).ok();
-
-        result.ok()?;
-
-        Some((stat.st_mtim.tv_sec as i64, stat.st_ino as u64, stat.st_dev as u64))
     }
 
     fn run_init(&self, obj: &DSO) {

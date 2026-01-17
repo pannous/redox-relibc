@@ -26,7 +26,7 @@ pub mod callbacks;
 pub mod debug;
 mod dso;
 pub mod linker;
-pub mod shared_cache;
+// pub mod shared_cache; // Disabled - needs further testing
 pub mod start;
 pub mod tcb;
 
