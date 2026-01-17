@@ -38,7 +38,6 @@ use super::{
     callbacks::LinkerCallbacks,
     debug::{_dl_debug_state, _r_debug, RTLDState},
     dso::{DSO, ProgramHeader, Rela},
-    shared_cache::{init_shared_cache, cache_lookup, cache_insert_by_path},
     tcb::{Master, Tcb},
 };
 
@@ -78,25 +77,6 @@ impl DlError {
 pub type Result<T> = core::result::Result<T, DlError>;
 
 pub(super) static GLOBAL_SCOPE: RwLock<Scope> = RwLock::new(Scope::global());
-
-use core::sync::atomic::{AtomicUsize, Ordering};
-
-/// Generation counter - incremented on dlopen/dlclose to invalidate stale cache entries
-static CACHE_GENERATION: AtomicUsize = AtomicUsize::new(0);
-
-/// Cached result of symbol resolution
-#[derive(Clone)]
-pub struct CachedSymbol {
-    pub address: usize,
-    pub size: usize,
-    pub sym_type: u8,
-    pub binding: SymbolBinding,
-    pub dso: Weak<DSO>,
-}
-
-/// Global symbol cache: name -> (cached_symbol, generation)
-pub(super) static SYMBOL_CACHE: RwLock<BTreeMap<String, (CachedSymbol, usize)>> =
-    RwLock::new(BTreeMap::new());
 
 struct MmapFile {
     fd: i32,
@@ -243,69 +223,6 @@ impl Scope {
         name: &'a str,
         skip: usize,
     ) -> Option<(Symbol<'a>, SymbolBinding, Arc<DSO>)> {
-        // Cache lookup for global scope only (skip == 0 means normal lookup, not RTLD_NEXT)
-        if skip == 0 {
-            if let Self::Global { objs } = self {
-                let current_gen = CACHE_GENERATION.load(Ordering::Acquire);
-                // 1. Check in-process cache first
-                if let Some((cached, cached_gen)) = SYMBOL_CACHE.read().get(name) {
-                    if *cached_gen == current_gen {
-                        // Cache hit - reconstruct Symbol from cached data
-                        if let Some(dso) = cached.dso.upgrade() {
-                            return Some((
-                                Symbol {
-                                    name,
-                                    base: dso.mmap.as_ptr() as usize,
-                                    value: cached.address - dso.mmap.as_ptr() as usize,
-                                    size: cached.size,
-                                    sym_type: cached.sym_type,
-                                },
-                                cached.binding.clone(),
-                                dso,
-                            ));
-                        }
-                        // DSO was unloaded, fall through to normal lookup
-                    }
-                }
-
-                // 2. Check shared (cross-process) cache
-                if let Some(cached) = cache_lookup(name) {
-                    // Find matching DSO by path
-                    for weak_dso in objs.iter() {
-                        if let Some(dso) = weak_dso.upgrade() {
-                            if dso.name == cached.dso_path {
-                                let base = dso.mmap.as_ptr() as usize;
-                                let address = base + cached.offset_in_dso as usize;
-                                // Update in-process cache
-                                let in_proc_cached = CachedSymbol {
-                                    address,
-                                    size: cached.size as usize,
-                                    sym_type: cached.sym_type,
-                                    binding: cached.binding.clone(),
-                                    dso: Arc::downgrade(&dso),
-                                };
-                                SYMBOL_CACHE.write().insert(
-                                    name.to_string(),
-                                    (in_proc_cached, current_gen),
-                                );
-                                return Some((
-                                    Symbol {
-                                        name,
-                                        base,
-                                        value: cached.offset_in_dso as usize,
-                                        size: cached.size as usize,
-                                        sym_type: cached.sym_type,
-                                    },
-                                    cached.binding,
-                                    dso,
-                                ));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         let mut res = None;
 
         let get_sym = |obj: Arc<DSO>| {
@@ -320,7 +237,7 @@ impl Scope {
             None
         };
 
-        let result = match self {
+        match self {
             Self::Global { objs } => objs
                 .iter()
                 .skip(skip)
@@ -339,40 +256,7 @@ impl Scope {
                     .find_map(get_sym)
             }
         }
-        .or(res);
-
-        // Cache the result for global scope lookups (skip == 0)
-        if skip == 0 {
-            if let Self::Global { .. } = self {
-                if let Some((ref sym, ref binding, ref dso)) = result {
-                    // Update in-process cache
-                    let cached = CachedSymbol {
-                        address: sym.as_ptr() as usize,
-                        size: sym.size,
-                        sym_type: sym.sym_type,
-                        binding: binding.clone(),
-                        dso: Arc::downgrade(dso),
-                    };
-                    let current_gen = CACHE_GENERATION.load(Ordering::Acquire);
-                    SYMBOL_CACHE
-                        .write()
-                        .insert(name.to_string(), (cached, current_gen));
-
-                    // Also insert into shared (cross-process) cache
-                    let offset_in_dso = sym.as_ptr() as usize - dso.mmap.as_ptr() as usize;
-                    cache_insert_by_path(
-                        name,
-                        offset_in_dso as u64,
-                        sym.size as u64,
-                        sym.sym_type,
-                        binding.clone(),
-                        &dso.name,
-                    );
-                }
-            }
-        }
-
-        result
+        .or(res)
     }
 
     fn copy_into(&self, other: &mut Self) {
@@ -515,9 +399,6 @@ const ROOT_ID: usize = 1;
 
 impl Linker {
     pub fn new(config: Config) -> Self {
-        // Initialize shared cache for cross-process symbol caching
-        init_shared_cache();
-
         Self {
             config,
             next_object_id: ROOT_ID,
@@ -667,9 +548,6 @@ impl Linker {
 
                 _ => unreachable!(),
             }
-
-            // Invalidate symbol cache - DSO being unloaded may have provided symbols
-            CACHE_GENERATION.fetch_add(1, Ordering::Release);
 
             let _ = self.objects.remove(&obj.id).unwrap();
             for dep in obj.dependencies() {
@@ -841,9 +719,6 @@ impl Linker {
             self.run_init(&obj);
             self.register_object(obj);
         }
-
-        // Invalidate symbol cache - new DSOs may provide different symbol definitions
-        CACHE_GENERATION.fetch_add(1, Ordering::Release);
 
         _r_debug.lock().state = RTLDState::RT_CONSISTENT;
         _dl_debug_state();
