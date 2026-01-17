@@ -32,6 +32,28 @@ use super::{
 
 use generic_rt::ExpectTlsFree;
 
+// Early debug output using raw syscalls - works before any initialization
+#[cfg(target_os = "redox")]
+fn debug_raw(msg: &[u8]) {
+    unsafe {
+        // Redox SYS_WRITE = SYS_CLASS_FILE | SYS_ARG_SLICE | 4 = 0x21000004
+        const SYS_WRITE: usize = 0x2000_0000 | 0x0100_0000 | 4;
+        // Try writing to stdout (fd 1) - stderr might not be connected
+        core::arch::asm!(
+            "svc 0",
+            in("x8") SYS_WRITE,
+            in("x0") 1usize,  // fd = stdout
+            in("x1") msg.as_ptr() as usize,
+            in("x2") msg.len(),
+            lateout("x0") _,
+            options(nostack)
+        );
+    }
+}
+
+#[cfg(not(target_os = "redox"))]
+fn debug_raw(_msg: &[u8]) {}
+
 #[cfg(target_pointer_width = "32")]
 pub const SIZEOF_EHDR: usize = 52;
 
@@ -153,14 +175,19 @@ fn resolve_path_name(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: usize) -> usize {
+    debug_raw(b"[ld.so] A: entry\n");
+
     // Setup TCB for ourselves.
     unsafe {
+        debug_raw(b"[ld.so] B: get thr_fd\n");
         #[cfg(target_os = "redox")]
         let thr_fd =
             crate::platform::get_auxv_raw(sp.auxv().cast(), redox_rt::auxv_defs::AT_REDOX_THR_FD)
                 .expect_notls("no thread fd present");
 
+        debug_raw(b"[ld.so] C: Tcb::new\n");
         let tcb = Tcb::new(0).expect_notls("[ld.so]: failed to allocate bootstrap TCB");
+        debug_raw(b"[ld.so] D: tcb.activate\n");
         tcb.activate(
             #[cfg(target_os = "redox")]
             Some(
@@ -169,6 +196,7 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
                     .expect_notls("failed to move thread fd to upper table"),
             ),
         );
+        debug_raw(b"[ld.so] E: redox_rt init\n");
         #[cfg(target_os = "redox")]
         {
             let proc_fd = crate::platform::get_auxv_raw(
@@ -182,18 +210,24 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
                     .to_upper()
                     .expect_notls("failed to move proc fd to upper table"),
             );
+            debug_raw(b"[ld.so] F: sighandler\n");
             redox_rt::signal::setup_sighandler(&tcb.os_specific, true);
         }
     }
+    debug_raw(b"[ld.so] G: TCB done\n");
 
     // We get the arguments, the environment, and the auxilary vector
     let (argv, envs, auxv) = unsafe {
         let argv_start = sp.argv() as *mut usize;
+        debug_raw(b"[ld.so] H: get_argv\n");
         let (argv, argv_end) = get_argv(argv_start);
+        debug_raw(b"[ld.so] I: get_env\n");
         let (envs, envs_end) = get_env(argv_end.add(1));
+        debug_raw(b"[ld.so] J: get_auxvs\n");
         let auxv = get_auxvs(envs_end.add(1));
         (argv, envs, auxv)
     };
+    debug_raw(b"[ld.so] K: args done\n");
 
     unsafe {
         crate::platform::OUR_ENVIRON.unsafe_set(
@@ -216,19 +250,23 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         crate::platform::environ = crate::platform::OUR_ENVIRON.unsafe_mut().as_mut_ptr();
     }
 
+    debug_raw(b"[ld.so] L: check manual\n");
     let is_manual = if let Some(img_entry) = get_auxv(&auxv, AT_ENTRY) {
         img_entry == ld_entry
     } else {
         true
     };
 
+    debug_raw(b"[ld.so] M: r_debug\n");
     // we might need global lock for this kind of stuff
     _r_debug.lock().r_ldbase = ld_entry;
 
+    debug_raw(b"[ld.so] N: platform init\n");
     // TODO: Fix memory leak, although minimal.
     unsafe {
         crate::platform::init(auxv.clone());
     }
+    debug_raw(b"[ld.so] O: platform done\n");
 
     let name_or_path = if is_manual {
         // ld.so is run directly by user and not via execve() or similar systemcall
@@ -246,13 +284,16 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         argv[0].to_string()
     };
 
+    debug_raw(b"[ld.so] P: resolve path\n");
     let (path, _name) = match resolve_path_name(&name_or_path, &envs) {
         Some((p, n)) => (p, n),
         None => {
+            debug_raw(b"[ld.so] FAIL: path not found\n");
             eprintln!("ld.so: failed to locate '{}'", name_or_path);
             unistd::_exit(1);
         }
     };
+    debug_raw(b"[ld.so] Q: path resolved\n");
 
     // if we are not running in manual mode, then the main
     // program is already loaded by the kernel and we want
@@ -267,10 +308,16 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         }
         base
     };
+    debug_raw(b"[ld.so] R: Linker::new\n");
     let mut linker = Linker::new(Config::from_env(&envs));
+    debug_raw(b"[ld.so] S: load_program\n");
     let entry = match linker.load_program(&path, base_addr) {
-        Ok(entry) => entry,
+        Ok(entry) => {
+            debug_raw(b"[ld.so] T: load OK\n");
+            entry
+        }
         Err(err) => {
+            debug_raw(b"[ld.so] FAIL: load_program\n");
             eprintln!("[ld.so]: failed to link '{}': {:?}", path, err);
             eprintln!("[ld.so]: enable debug output with `LD_DEBUG=all` for more information");
             unistd::_exit(1);
