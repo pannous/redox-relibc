@@ -6,31 +6,12 @@ use core::arch::global_asm;
 #[cfg(target_arch = "aarch64")]
 global_asm!(
     "
-.section .rodata
-_debug_msg:
-    .ascii \"[ld.so] _start\\n\"
-_debug_msg_end:
-
 .section .text
 .global _start
 _start:
-    // DEBUG: infinite loop to verify we reach _start
-    // If system hangs with CPU at 100%, we know _start is reached
-1:  b 1b
-
     mov x28, sp
     // align stack to 16 bytes
     and sp, x28, #0xfffffffffffffff0
-
-    // DEBUG: write to stdout before any Rust code
-    // SYS_WRITE = 0x21000004 (Redox syscall)
-    mov x8, #0x0004
-    movk x8, #0x2100, lsl #16
-    mov x0, #1                      // fd = stdout
-    adr x1, _debug_msg              // buf
-    adr x2, _debug_msg_end
-    sub x2, x2, x1                  // len = end - start
-    svc #0
 
     adr x1, _start
     mov x0, x28
