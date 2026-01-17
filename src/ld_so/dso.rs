@@ -303,7 +303,7 @@ impl RelocationKind {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 #[repr(u8)]
 pub enum SymbolBinding {
     /// Global symbols are visible to all object files being combined. One

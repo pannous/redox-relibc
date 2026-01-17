@@ -78,6 +78,25 @@ pub type Result<T> = core::result::Result<T, DlError>;
 
 pub(super) static GLOBAL_SCOPE: RwLock<Scope> = RwLock::new(Scope::global());
 
+use core::sync::atomic::{AtomicUsize, Ordering};
+
+/// Generation counter - incremented on dlopen/dlclose to invalidate stale cache entries
+static CACHE_GENERATION: AtomicUsize = AtomicUsize::new(0);
+
+/// Cached result of symbol resolution
+#[derive(Clone)]
+pub struct CachedSymbol {
+    pub address: usize,
+    pub size: usize,
+    pub sym_type: u8,
+    pub binding: SymbolBinding,
+    pub dso: Weak<DSO>,
+}
+
+/// Global symbol cache: name -> (cached_symbol, generation)
+pub(super) static SYMBOL_CACHE: RwLock<BTreeMap<String, (CachedSymbol, usize)>> =
+    RwLock::new(BTreeMap::new());
+
 struct MmapFile {
     fd: i32,
     ptr: *mut c_void,
@@ -223,6 +242,32 @@ impl Scope {
         name: &'a str,
         skip: usize,
     ) -> Option<(Symbol<'a>, SymbolBinding, Arc<DSO>)> {
+        // Cache lookup for global scope only (skip == 0 means normal lookup, not RTLD_NEXT)
+        if skip == 0 {
+            if let Self::Global { .. } = self {
+                let current_gen = CACHE_GENERATION.load(Ordering::Acquire);
+                if let Some((cached, cached_gen)) = SYMBOL_CACHE.read().get(name) {
+                    if *cached_gen == current_gen {
+                        // Cache hit - reconstruct Symbol from cached data
+                        if let Some(dso) = cached.dso.upgrade() {
+                            return Some((
+                                Symbol {
+                                    name,
+                                    base: dso.mmap.as_ptr() as usize,
+                                    value: cached.address - dso.mmap.as_ptr() as usize,
+                                    size: cached.size,
+                                    sym_type: cached.sym_type,
+                                },
+                                cached.binding.clone(),
+                                dso,
+                            ));
+                        }
+                        // DSO was unloaded, fall through to normal lookup
+                    }
+                }
+            }
+        }
+
         let mut res = None;
 
         let get_sym = |obj: Arc<DSO>| {
@@ -237,7 +282,7 @@ impl Scope {
             None
         };
 
-        match self {
+        let result = match self {
             Self::Global { objs } => objs
                 .iter()
                 .skip(skip)
@@ -256,7 +301,28 @@ impl Scope {
                     .find_map(get_sym)
             }
         }
-        .or(res)
+        .or(res);
+
+        // Cache the result for global scope lookups (skip == 0)
+        if skip == 0 {
+            if let Self::Global { .. } = self {
+                if let Some((ref sym, ref binding, ref dso)) = result {
+                    let cached = CachedSymbol {
+                        address: sym.as_ptr() as usize,
+                        size: sym.size,
+                        sym_type: sym.sym_type,
+                        binding: binding.clone(),
+                        dso: Arc::downgrade(dso),
+                    };
+                    let current_gen = CACHE_GENERATION.load(Ordering::Acquire);
+                    SYMBOL_CACHE
+                        .write()
+                        .insert(name.to_string(), (cached, current_gen));
+                }
+            }
+        }
+
+        result
     }
 
     fn copy_into(&self, other: &mut Self) {
@@ -549,6 +615,9 @@ impl Linker {
                 _ => unreachable!(),
             }
 
+            // Invalidate symbol cache - DSO being unloaded may have provided symbols
+            CACHE_GENERATION.fetch_add(1, Ordering::Release);
+
             let _ = self.objects.remove(&obj.id).unwrap();
             for dep in obj.dependencies() {
                 self.unload(ObjectHandle::new(
@@ -719,6 +788,9 @@ impl Linker {
             self.run_init(&obj);
             self.register_object(obj);
         }
+
+        // Invalidate symbol cache - new DSOs may provide different symbol definitions
+        CACHE_GENERATION.fetch_add(1, Ordering::Release);
 
         _r_debug.lock().state = RTLDState::RT_CONSISTENT;
         _dl_debug_state();
