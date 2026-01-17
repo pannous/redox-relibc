@@ -1195,12 +1195,12 @@ pub fn resolve_sym<'a>(
                     size: cached.size as usize,
                     sym_type: cached.sym_type,
                 };
-                eprintln!("[ld.so cache] HIT: {} from {}", name, cached.dso_path);
+                trace!("[ld.so cache] HIT: {} from {}", name, cached.dso_path);
                 return Some((symbol, cached.binding, dso));
             }
         }
         // DSO not found in current scopes - fall through to normal lookup
-        eprintln!("[ld.so cache] MISS (DSO not found): {} in {}", name, cached.dso_path);
+        trace!("[ld.so cache] MISS (DSO not found): {} in {}", name, cached.dso_path);
     }
 
     // Normal lookup
@@ -1217,7 +1217,7 @@ pub fn resolve_sym<'a>(
             &dso.name,
         );
         if inserted {
-            eprintln!("[ld.so cache] INSERTED: {} from {}", name, dso.name);
+            trace!("[ld.so cache] INSERTED: {} from {}", name, dso.name);
         }
     }
 

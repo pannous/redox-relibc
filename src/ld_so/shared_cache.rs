@@ -286,16 +286,16 @@ impl SharedCache {
                 trace!("[ld.so cache] create_new: file created, fd={}", fd);
                 fd
             }
-            Err(e) => {
-                trace!("[ld.so cache] create_new: open failed: {:?}", e);
+            Err(_e) => {
+                trace!("[ld.so cache] create_new: open failed: {:?}", _e);
                 return None;
             }
         };
 
         // Extend file to required size
         trace!("[ld.so cache] create_new: ftruncate to {} bytes", TOTAL_CACHE_SIZE);
-        if let Err(e) = Sys::ftruncate(fd, TOTAL_CACHE_SIZE as i64) {
-            trace!("[ld.so cache] create_new: ftruncate failed: {:?}", e);
+        if let Err(_e) = Sys::ftruncate(fd, TOTAL_CACHE_SIZE as i64) {
+            trace!("[ld.so cache] create_new: ftruncate failed: {:?}", _e);
             Sys::close(fd).ok();
             return None;
         }
@@ -711,12 +711,12 @@ pub fn init_shared_cache() {
         trace!("[ld.so cache] calling SharedCache::open()");
         match SharedCache::open() {
             Some(mut cache) => {
-                let shared_str = if cache.is_shared() { "CROSS-PROCESS" } else { "per-process" };
-                trace!("[ld.so cache] cache opened ({} mode), validating DSOs...", shared_str);
+                let _shared_str = if cache.is_shared() { "CROSS-PROCESS" } else { "per-process" };
+                trace!("[ld.so cache] cache opened ({} mode), validating DSOs...", _shared_str);
                 cache.validate_dsos();
-                let (dso_count, sym_count, pool_used) = cache.stats();
+                let (_dso_count, _sym_count, _pool_used) = cache.stats();
                 trace!("[ld.so cache] validated: {} DSOs, {} symbols, {} bytes pool ({})",
-                         dso_count, sym_count, pool_used, shared_str);
+                         _dso_count, _sym_count, _pool_used, _shared_str);
                 *SHARED_CACHE.0.get() = Some(cache);
                 trace!("[ld.so cache] initialization complete");
             }
