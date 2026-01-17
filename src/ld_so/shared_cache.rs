@@ -27,20 +27,19 @@ use crate::{
 
 use super::dso::SymbolBinding;
 
-/// Cache file path - only used after /tmp is mounted
-/// During initfs boot, /tmp may not exist so cache operations will be skipped
-const CACHE_PATH: &str = "/tmp/ld_symbol_cache";
+/// Cache file path for POSIX shared memory (preferred for cross-process sharing)
+const SHM_CACHE_PATH: &str = "/scheme/shm/ld_symbol_cache";
 
-/// Check if /tmp exists (indicates we're past early initfs boot)
-fn tmp_exists() -> bool {
-    // Use a simple file existence check via fstat on the path
-    // During initfs boot, /tmp won't exist yet
-    let path = match CString::new("/tmp") {
+/// Fallback cache file path in /tmp (used if /scheme/shm is unavailable)
+const TMP_CACHE_PATH: &str = "/tmp/ld_symbol_cache";
+
+/// Check if a path exists
+fn path_exists(path_str: &str) -> bool {
+    let path = match CString::new(path_str) {
         Ok(p) => p,
         Err(_) => return false,
     };
 
-    // Try to open /tmp to see if it exists
     let result = Sys::open(
         crate::c_str::CStr::borrow(&path),
         fcntl::O_RDONLY | fcntl::O_CLOEXEC,
@@ -54,6 +53,25 @@ fn tmp_exists() -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// Determine which cache path to use and whether we can use MAP_SHARED
+/// Returns (path, use_map_shared)
+fn select_cache_path() -> Option<(&'static str, bool)> {
+    // Prefer /scheme/shm for true shared memory (MAP_SHARED works reliably)
+    if path_exists("/scheme/shm") {
+        eprintln!("[ld.so cache] using shm path for cross-process sharing");
+        return Some((SHM_CACHE_PATH, true));
+    }
+
+    // Fall back to /tmp if available (MAP_PRIVATE only to avoid hangs)
+    if path_exists("/tmp") {
+        eprintln!("[ld.so cache] using /tmp fallback (no cross-process sharing)");
+        return Some((TMP_CACHE_PATH, false));
+    }
+
+    // Neither available (early boot)
+    None
 }
 
 /// Magic number for cache file identification
@@ -146,6 +164,8 @@ pub struct SharedCache {
     fd: i32,
     /// Whether cache is valid (DSOs haven't changed)
     valid: bool,
+    /// Whether this cache uses MAP_SHARED (cross-process) or MAP_PRIVATE (per-process)
+    is_shared: bool,
 }
 
 /// Result of a cache lookup
@@ -164,20 +184,18 @@ pub struct CacheLookupResult {
 
 impl SharedCache {
     /// Open or create the shared symbol cache.
-    /// Returns None if /tmp doesn't exist (early boot) or on any error.
+    /// Returns None if neither /scheme/shm nor /tmp exist (early boot) or on any error.
     pub fn open() -> Option<Self> {
-        eprintln!("[ld.so cache] open: checking /tmp exists");
-        // Skip cache during early boot when /tmp doesn't exist
-        if !tmp_exists() {
-            eprintln!("[ld.so cache] open: /tmp doesn't exist, skipping");
-            return None;
-        }
+        eprintln!("[ld.so cache] open: selecting cache path");
 
-        eprintln!("[ld.so cache] open: /tmp exists, creating path");
-        let path = CString::new(CACHE_PATH).ok()?;
+        // Select cache path and determine if we can use MAP_SHARED
+        let (cache_path, use_map_shared) = select_cache_path()?;
+
+        eprintln!("[ld.so cache] open: using path={}, shared={}", cache_path, use_map_shared);
+        let path = CString::new(cache_path).ok()?;
         let path_cstr = crate::c_str::CStr::borrow(&path);
 
-        eprintln!("[ld.so cache] open: trying to open {}", CACHE_PATH);
+        eprintln!("[ld.so cache] open: trying to open {}", cache_path);
         // Try to open existing cache first
         let fd = Sys::open(path_cstr, fcntl::O_RDWR | fcntl::O_CLOEXEC, 0).ok();
 
@@ -210,14 +228,23 @@ impl SharedCache {
         eprintln!("[ld.so cache] open: fd={}, needs_init={}, about to mmap {} bytes",
                  fd, needs_init, TOTAL_CACHE_SIZE);
 
-        // Memory map the file - use MAP_PRIVATE to avoid shared memory issues
-        // This means changes won't persist across processes, but avoids blocking
+        // Choose mapping flags based on whether we're using shm or /tmp
+        // MAP_SHARED works reliably with /scheme/shm (designed for shared memory)
+        // MAP_PRIVATE is safer for /tmp (avoids potential file sync hangs)
+        let map_flags = if use_map_shared {
+            eprintln!("[ld.so cache] open: using MAP_SHARED for cross-process caching");
+            sys_mman::MAP_SHARED
+        } else {
+            eprintln!("[ld.so cache] open: using MAP_PRIVATE (no cross-process caching)");
+            sys_mman::MAP_PRIVATE
+        };
+
         let ptr = unsafe {
             Sys::mmap(
                 ptr::null_mut(),
                 TOTAL_CACHE_SIZE,
                 sys_mman::PROT_READ | sys_mman::PROT_WRITE,
-                sys_mman::MAP_PRIVATE, // Changed from MAP_SHARED to avoid potential hangs
+                map_flags,
                 fd,
                 0,
             ).ok()?
@@ -231,6 +258,7 @@ impl SharedCache {
             mmap_ptr,
             fd,
             valid: false,
+            is_shared: use_map_shared,
         };
 
         if needs_init {
@@ -617,6 +645,11 @@ impl SharedCache {
         self.valid
     }
 
+    /// Check if this cache uses cross-process shared memory.
+    pub fn is_shared(&self) -> bool {
+        self.is_shared
+    }
+
     /// Get cache statistics for debugging.
     #[allow(dead_code)]
     pub fn stats(&self) -> (u32, u32, u32) {
@@ -674,11 +707,12 @@ pub fn init_shared_cache() {
         eprintln!("[ld.so cache] calling SharedCache::open()");
         match SharedCache::open() {
             Some(mut cache) => {
-                eprintln!("[ld.so cache] cache opened, validating DSOs...");
+                let shared_str = if cache.is_shared() { "CROSS-PROCESS" } else { "per-process" };
+                eprintln!("[ld.so cache] cache opened ({} mode), validating DSOs...", shared_str);
                 cache.validate_dsos();
                 let (dso_count, sym_count, pool_used) = cache.stats();
-                eprintln!("[ld.so cache] validated: {} DSOs, {} symbols, {} bytes pool",
-                         dso_count, sym_count, pool_used);
+                eprintln!("[ld.so cache] validated: {} DSOs, {} symbols, {} bytes pool ({})",
+                         dso_count, sym_count, pool_used, shared_str);
                 *SHARED_CACHE.0.get() = Some(cache);
                 eprintln!("[ld.so cache] initialization complete");
             }
