@@ -259,6 +259,23 @@ impl Scope {
         .or(res)
     }
 
+    /// Find a DSO by name in this scope (used for cache lookups)
+    pub fn find_dso_by_name(&self, name: &str) -> Option<Arc<DSO>> {
+        match self {
+            Self::Global { objs } => objs
+                .iter()
+                .filter_map(|o| o.upgrade())
+                .find(|dso| dso.name == name),
+            Self::Local { owner, objs } => {
+                let owner = owner.as_ref()?.upgrade()?;
+                if owner.name == name {
+                    return Some(owner);
+                }
+                objs.iter().find(|dso| dso.name == name).cloned()
+            }
+        }
+    }
+
     fn copy_into(&self, other: &mut Self) {
         match (self, other) {
             (Self::Local { owner, objs }, Self::Global { objs: other_objs }) => {

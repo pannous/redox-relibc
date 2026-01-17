@@ -13,6 +13,7 @@ use object::{
 use super::{
     debug::{_r_debug, RTLDDebug},
     linker::{__plt_resolve_trampoline, GLOBAL_SCOPE, Resolve, Scope, Symbol},
+    shared_cache::{cache_insert_by_path, cache_lookup},
     tcb::{Master, Tcb},
 };
 use crate::{
@@ -303,7 +304,7 @@ impl RelocationKind {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(u8)]
 pub enum SymbolBinding {
     /// Global symbols are visible to all object files being combined. One
@@ -1182,7 +1183,43 @@ pub fn resolve_sym<'a>(
     name: &'a str,
     scopes: &[&'a Scope],
 ) -> Option<(Symbol<'a>, SymbolBinding, Arc<DSO>)> {
-    scopes.iter().find_map(|scope| scope.get_sym(name))
+    // Try cache lookup first
+    if let Some(cached) = cache_lookup(name) {
+        // Find DSO by name in scopes
+        for scope in scopes.iter() {
+            if let Some(dso) = scope.find_dso_by_name(&cached.dso_path) {
+                let symbol = Symbol {
+                    name,
+                    value: cached.offset_in_dso as usize,
+                    base: dso.mmap.as_ptr() as usize,
+                    size: cached.size as usize,
+                    sym_type: cached.sym_type,
+                };
+                return Some((symbol, cached.binding, dso));
+            }
+        }
+        // DSO not found in current scopes - fall through to normal lookup
+    }
+
+    // Normal lookup
+    let result = scopes.iter().find_map(|scope| scope.get_sym(name));
+
+    // Cache the result for future lookups
+    if let Some((ref sym, ref binding, ref dso)) = result {
+        let inserted = cache_insert_by_path(
+            name,
+            sym.value as u64,
+            sym.size as u64,
+            sym.sym_type,
+            *binding,
+            &dso.name,
+        );
+        if inserted {
+            eprintln!("[ld.so cache] INSERTED: {} from {}", name, dso.name);
+        }
+    }
+
+    result
 }
 
 #[repr(C)]
