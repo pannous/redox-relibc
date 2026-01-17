@@ -574,6 +574,12 @@ impl SharedCache {
         let dsos = self.dso_table();
 
         for entry in dsos {
+            // Skip validation for DSOs registered without file metadata
+            // (mtime=0 means "trust cache, don't validate file")
+            if entry.mtime == 0 && entry.inode == 0 && entry.dev == 0 {
+                continue;
+            }
+
             let path = match Self::path_from_bytes(&entry.path) {
                 Some(p) => p,
                 None => continue,
