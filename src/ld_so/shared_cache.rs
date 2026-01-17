@@ -60,13 +60,11 @@ fn path_exists(path_str: &str) -> bool {
 fn select_cache_path() -> Option<(&'static str, bool)> {
     // Prefer /scheme/shm for true shared memory (MAP_SHARED works reliably)
     if path_exists("/scheme/shm") {
-        eprintln!("[ld.so cache] using shm path for cross-process sharing");
         return Some((SHM_CACHE_PATH, true));
     }
 
     // Fall back to /tmp if available (MAP_PRIVATE only to avoid hangs)
     if path_exists("/tmp") {
-        eprintln!("[ld.so cache] using /tmp fallback (no cross-process sharing)");
         return Some((TMP_CACHE_PATH, false));
     }
 
