@@ -614,11 +614,6 @@ static SHARED_CACHE: CacheHolder = CacheHolder(UnsafeCell::new(None));
 
 /// Initialize the shared cache (call once at linker startup).
 pub fn init_shared_cache() {
-    // DISABLED: Shared cache is disabled for debugging
-    // Will be enabled once basic boot works
-    return;
-
-    #[allow(unreachable_code)]
     unsafe {
         if (*SHARED_CACHE.0.get()).is_none() {
             if let Some(mut cache) = SharedCache::open() {
@@ -664,4 +659,38 @@ pub fn cache_insert(
         Some(cache) => cache.insert(name, dso_idx, offset_in_dso, size, sym_type, binding),
         None => false,
     }
+}
+
+/// Insert a symbol into the shared cache by DSO path.
+///
+/// This will find or register the DSO first, then insert the symbol.
+/// Returns true if successful.
+pub fn cache_insert_by_path(
+    name: &str,
+    offset_in_dso: u64,
+    size: u64,
+    sym_type: u8,
+    binding: SymbolBinding,
+    dso_path: &str,
+) -> bool {
+    let cache = match shared_cache_mut() {
+        Some(c) => c,
+        None => return false,
+    };
+
+    // Find existing DSO by path
+    for (idx, entry) in cache.dso_table().iter().enumerate() {
+        if let Some(entry_path) = SharedCache::path_from_bytes(&entry.path) {
+            if entry_path == dso_path {
+                return cache.insert(name, idx as u16, offset_in_dso, size, sym_type, binding);
+            }
+        }
+    }
+
+    // DSO not registered - register it with default metadata (will be validated on next boot)
+    if let Some(dso_idx) = cache.register_dso(dso_path, 0, 0, 0) {
+        return cache.insert(name, dso_idx, offset_in_dso, size, sym_type, binding);
+    }
+
+    false
 }

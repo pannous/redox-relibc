@@ -38,6 +38,7 @@ use super::{
     callbacks::LinkerCallbacks,
     debug::{_dl_debug_state, _r_debug, RTLDState},
     dso::{DSO, ProgramHeader, Rela},
+    shared_cache::{init_shared_cache, cache_lookup, cache_insert_by_path},
     tcb::{Master, Tcb},
 };
 
@@ -244,8 +245,9 @@ impl Scope {
     ) -> Option<(Symbol<'a>, SymbolBinding, Arc<DSO>)> {
         // Cache lookup for global scope only (skip == 0 means normal lookup, not RTLD_NEXT)
         if skip == 0 {
-            if let Self::Global { .. } = self {
+            if let Self::Global { objs } = self {
                 let current_gen = CACHE_GENERATION.load(Ordering::Acquire);
+                // 1. Check in-process cache first
                 if let Some((cached, cached_gen)) = SYMBOL_CACHE.read().get(name) {
                     if *cached_gen == current_gen {
                         // Cache hit - reconstruct Symbol from cached data
@@ -263,6 +265,42 @@ impl Scope {
                             ));
                         }
                         // DSO was unloaded, fall through to normal lookup
+                    }
+                }
+
+                // 2. Check shared (cross-process) cache
+                if let Some(cached) = cache_lookup(name) {
+                    // Find matching DSO by path
+                    for weak_dso in objs.iter() {
+                        if let Some(dso) = weak_dso.upgrade() {
+                            if dso.name == cached.dso_path {
+                                let base = dso.mmap.as_ptr() as usize;
+                                let address = base + cached.offset_in_dso as usize;
+                                // Update in-process cache
+                                let in_proc_cached = CachedSymbol {
+                                    address,
+                                    size: cached.size as usize,
+                                    sym_type: cached.sym_type,
+                                    binding: cached.binding.clone(),
+                                    dso: Arc::downgrade(&dso),
+                                };
+                                SYMBOL_CACHE.write().insert(
+                                    name.to_string(),
+                                    (in_proc_cached, current_gen),
+                                );
+                                return Some((
+                                    Symbol {
+                                        name,
+                                        base,
+                                        value: cached.offset_in_dso as usize,
+                                        size: cached.size as usize,
+                                        sym_type: cached.sym_type,
+                                    },
+                                    cached.binding,
+                                    dso,
+                                ));
+                            }
+                        }
                     }
                 }
             }
@@ -307,6 +345,7 @@ impl Scope {
         if skip == 0 {
             if let Self::Global { .. } = self {
                 if let Some((ref sym, ref binding, ref dso)) = result {
+                    // Update in-process cache
                     let cached = CachedSymbol {
                         address: sym.as_ptr() as usize,
                         size: sym.size,
@@ -318,6 +357,17 @@ impl Scope {
                     SYMBOL_CACHE
                         .write()
                         .insert(name.to_string(), (cached, current_gen));
+
+                    // Also insert into shared (cross-process) cache
+                    let offset_in_dso = sym.as_ptr() as usize - dso.mmap.as_ptr() as usize;
+                    cache_insert_by_path(
+                        name,
+                        offset_in_dso as u64,
+                        sym.size as u64,
+                        sym.sym_type,
+                        binding.clone(),
+                        &dso.name,
+                    );
                 }
             }
         }
@@ -465,6 +515,9 @@ const ROOT_ID: usize = 1;
 
 impl Linker {
     pub fn new(config: Config) -> Self {
+        // Initialize shared cache for cross-process symbol caching
+        init_shared_cache();
+
         Self {
             config,
             next_object_id: ROOT_ID,
