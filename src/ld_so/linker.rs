@@ -507,7 +507,7 @@ impl Linker {
             ) {
                 Ok(dso) => {
                     if debug {
-                        eprintln!("[ld.so]: preloaded '{}' at {:#x}", lib_name, dso.base_addr);
+                        eprintln!("[ld.so]: preloaded '{}' at {:#x}", lib_name, dso.mmap.as_ptr() as usize);
                     }
                 }
                 Err(e) => {
