@@ -35,6 +35,7 @@ use crate::{
 use super::{
     PATH_SEP,
     access::accessible,
+    boot_timing,
     callbacks::LinkerCallbacks,
     debug::{_dl_debug_state, _r_debug, RTLDState},
     dso::{DSO, ProgramHeader, Rela},
@@ -611,6 +612,7 @@ impl Linker {
         let mut new_objects = Vec::new();
         let mut objects_data = Vec::new();
         let mut tcb_masters = Vec::new();
+        let recursive_start = boot_timing::start();
         let loaded_dso = self.load_objects_recursive(
             path,
             runpath,
@@ -622,10 +624,13 @@ impl Linker {
             None,
             scope,
         )?;
+        boot_timing::end(recursive_start, "link", "load_recursive");
 
+        let reloc_start = boot_timing::start();
         for (i, obj) in new_objects.iter().enumerate() {
             obj.relocate(&objects_data[i], resolve).unwrap();
         }
+        boot_timing::end(reloc_start, "link", "relocate_all");
 
         unsafe {
             if !dlopened {
@@ -801,9 +806,16 @@ impl Linker {
 
         let debug = self.config.debug_flags.contains(DebugFlags::LOAD);
 
+        let search_start = boot_timing::start();
         let path = self.search_object(name, parent_runpath)?;
+        boot_timing::end(search_start, "link", "search_object");
+
+        let read_start = boot_timing::start();
         let file = self.read_file(&path)?;
+        boot_timing::end(read_start, "link", "read_file");
+
         let data = file.data();
+        let dso_start = boot_timing::start();
         let (obj, tcb_master, elf) = DSO::new(
             &path,
             data,
@@ -821,6 +833,7 @@ impl Linker {
 
             DlError::Malformed
         })?;
+        boot_timing::end(dso_start, "link", "dso_new");
 
         if debug {
             eprintln!(
