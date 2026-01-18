@@ -70,6 +70,7 @@ pub(crate) mod path;
 mod ptrace;
 pub(crate) mod signal;
 mod socket;
+pub mod strace;
 mod timer;
 
 static mut BRK_CUR: *mut c_void = ptr::null_mut();
