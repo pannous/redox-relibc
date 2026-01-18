@@ -1195,7 +1195,6 @@ pub fn resolve_sym<'a>(
                     size: cached.size as usize,
                     sym_type: cached.sym_type,
                 };
-                trace!("[ld.so cache] HIT: {} from {}", name, cached.dso_path);
                 return Some((symbol, cached.binding, dso));
             }
         }
