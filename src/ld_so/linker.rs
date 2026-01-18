@@ -366,6 +366,8 @@ pub struct Config {
     library_path: Option<String>,
     /// Resolve symbols at program startup.
     bind_now: bool,
+    /// Libraries to preload before the main program.
+    preload: Vec<String>,
 }
 
 impl Config {
@@ -391,6 +393,18 @@ impl Config {
             })
             .unwrap_or(DebugFlags::empty());
 
+        // Parse LD_PRELOAD - colon or space separated list of libraries
+        let preload = env
+            .get("LD_PRELOAD")
+            .map(|value| {
+                value
+                    .split(|c| c == ':' || c == ' ')
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+
         Self {
             debug_flags,
             library_path: env.get("LD_LIBRARY_PATH").cloned(),
@@ -398,6 +412,7 @@ impl Config {
                 .get("LD_BIND_NOW")
                 .map(|value| !value.is_empty())
                 .unwrap_or_default(),
+            preload,
         }
     }
 }
@@ -429,6 +444,9 @@ impl Linker {
     }
 
     pub fn load_program(&mut self, path: &str, base_addr: Option<usize>) -> Result<usize> {
+        // Load preloaded libraries first (LD_PRELOAD)
+        self.load_preload_libraries()?;
+
         let dso = self.load_object(
             path,
             &None,
@@ -442,6 +460,63 @@ impl Linker {
             ScopeKind::Global,
         )?;
         Ok(dso.entry_point)
+    }
+
+    /// Load libraries specified in LD_PRELOAD into the global scope.
+    /// These libraries are loaded before the main program and their symbols
+    /// take precedence over the program's own symbols.
+    fn load_preload_libraries(&mut self) -> Result<()> {
+        if self.config.preload.is_empty() {
+            return Ok(());
+        }
+
+        let debug = self.config.debug_flags.contains(DebugFlags::LOAD);
+        if debug {
+            eprintln!("[ld.so]: preloading {} libraries", self.config.preload.len());
+        }
+
+        // Clone preload list to avoid borrow issues
+        let preload_list: Vec<String> = self.config.preload.clone();
+
+        for lib_name in preload_list {
+            if debug {
+                eprintln!("[ld.so]: preloading '{}'", lib_name);
+            }
+
+            // Search for the library
+            let full_path = match self.search_object(&lib_name, &None) {
+                Ok(path) => path,
+                Err(e) => {
+                    eprintln!("[ld.so]: warning: preload library '{}' not found", lib_name);
+                    continue;
+                }
+            };
+
+            // Load the library into global scope
+            match self.load_object(
+                &full_path,
+                &None,
+                None,
+                true, // is_dependency = true (no entry point expected)
+                if self.config.bind_now {
+                    Resolve::Now
+                } else {
+                    Resolve::default()
+                },
+                ScopeKind::Global,
+            ) {
+                Ok(dso) => {
+                    if debug {
+                        eprintln!("[ld.so]: preloaded '{}' at {:#x}", lib_name, dso.base_addr);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[ld.so]: warning: failed to preload '{}': {:?}", lib_name, e);
+                }
+            }
+        }
+
+        Ok(())
     }
 
     pub fn load_library(
