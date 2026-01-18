@@ -22,6 +22,7 @@ use crate::{
 pub const PATH_SEP: char = ':';
 
 mod access;
+pub mod boot_timing;
 pub mod callbacks;
 pub mod debug;
 mod dso;

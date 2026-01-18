@@ -25,13 +25,12 @@ use crate::{
 use super::{
     PATH_SEP,
     access::accessible,
+    boot_timing,
     debug::_r_debug,
     linker::{Config, Linker},
     shared_cache::init_shared_cache,
     tcb::Tcb,
 };
-
-use crate::platform::sys::perf;
 
 use generic_rt::ExpectTlsFree;
 
@@ -156,9 +155,12 @@ fn resolve_path_name(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: usize) -> usize {
-    let ldso_start = perf::timestamp_ns();
+    // Initialize boot timing at the very start
+    boot_timing::init();
+    boot_timing::log("start", "entry");
 
     // Setup TCB for ourselves.
+    let tcb_start = boot_timing::start();
     unsafe {
         #[cfg(target_os = "redox")]
         let thr_fd =
@@ -190,8 +192,10 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
             redox_rt::signal::setup_sighandler(&tcb.os_specific, true);
         }
     }
+    boot_timing::end(tcb_start, "init", "tcb_setup");
 
     // We get the arguments, the environment, and the auxilary vector
+    let args_start = boot_timing::start();
     let (argv, envs, auxv) = unsafe {
         let argv_start = sp.argv() as *mut usize;
         let (argv, argv_end) = get_argv(argv_start);
@@ -199,7 +203,9 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         let auxv = get_auxvs(envs_end.add(1));
         (argv, envs, auxv)
     };
+    boot_timing::end(args_start, "init", "parse_args");
 
+    let env_start = boot_timing::start();
     unsafe {
         crate::platform::OUR_ENVIRON.unsafe_set(
             envs.iter()
@@ -220,6 +226,7 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
 
         crate::platform::environ = crate::platform::OUR_ENVIRON.unsafe_mut().as_mut_ptr();
     }
+    boot_timing::end(env_start, "init", "setup_environ");
 
     let is_manual = if let Some(img_entry) = get_auxv(&auxv, AT_ENTRY) {
         img_entry == ld_entry
@@ -231,9 +238,11 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
     _r_debug.lock().r_ldbase = ld_entry;
 
     // TODO: Fix memory leak, although minimal.
+    let platform_start = boot_timing::start();
     unsafe {
         crate::platform::init(auxv.clone());
     }
+    boot_timing::end(platform_start, "init", "platform_init");
 
     let name_or_path = if is_manual {
         // ld.so is run directly by user and not via execve() or similar systemcall
@@ -251,6 +260,7 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         argv[0].to_string()
     };
 
+    let resolve_start = boot_timing::start();
     let (path, _name) = match resolve_path_name(&name_or_path, &envs) {
         Some((p, n)) => (p, n),
         None => {
@@ -258,6 +268,7 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
             unistd::_exit(1);
         }
     };
+    boot_timing::end(resolve_start, "init", "resolve_path");
 
     // if we are not running in manual mode, then the main
     // program is already loaded by the kernel and we want
@@ -274,15 +285,19 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
     };
 
     // Initialize symbol cache (skipped if /tmp doesn't exist yet)
-    let cache_start = perf::timestamp_ns();
+    let cache_start = boot_timing::start();
     init_shared_cache();
-    perf::log_event("ldso", "cache_init", perf::timestamp_ns().saturating_sub(cache_start));
+    boot_timing::end(cache_start, "cache", "init_shared_cache");
 
-    let linker_start = perf::timestamp_ns();
+    // Create linker and load program
+    let linker_start = boot_timing::start();
     let mut linker = Linker::new(Config::from_env(&envs));
+    boot_timing::end(linker_start, "link", "linker_new");
+
+    let load_start = boot_timing::start();
     let entry = match linker.load_program(&path, base_addr) {
         Ok(entry) => {
-            perf::log_event("ldso", "load_program", perf::timestamp_ns().saturating_sub(linker_start));
+            boot_timing::end(load_start, "link", "load_program");
             entry
         }
         Err(err) => {
@@ -291,13 +306,16 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
             unistd::_exit(1);
         }
     };
+
+    let finalize_start = boot_timing::start();
     if let Some(tcb) = unsafe { Tcb::current() } {
         tcb.linker_ptr = Box::into_raw(Box::new(Mutex::new(linker)));
         tcb.mspace = ALLOCATOR.get();
     }
+    boot_timing::end(finalize_start, "link", "finalize");
 
-    // Log total ld.so time
-    perf::log_event("ldso", "total", perf::timestamp_ns().saturating_sub(ldso_start));
+    // Log completion
+    boot_timing::log("done", &path);
 
     if is_manual {
         eprintln!("[ld.so]: entry '{}': {:#x}", path, entry);
