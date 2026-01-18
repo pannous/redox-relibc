@@ -31,6 +31,8 @@ use super::{
     tcb::Tcb,
 };
 
+use crate::platform::sys::perf;
+
 use generic_rt::ExpectTlsFree;
 
 #[cfg(target_pointer_width = "32")]
@@ -154,6 +156,7 @@ fn resolve_path_name(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: usize) -> usize {
+    let ldso_start = perf::timestamp_ns();
 
     // Setup TCB for ourselves.
     unsafe {
@@ -271,11 +274,15 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
     };
 
     // Initialize symbol cache (skipped if /tmp doesn't exist yet)
+    let cache_start = perf::timestamp_ns();
     init_shared_cache();
+    perf::log_event("ldso", "cache_init", perf::timestamp_ns().saturating_sub(cache_start));
 
+    let linker_start = perf::timestamp_ns();
     let mut linker = Linker::new(Config::from_env(&envs));
     let entry = match linker.load_program(&path, base_addr) {
         Ok(entry) => {
+            perf::log_event("ldso", "load_program", perf::timestamp_ns().saturating_sub(linker_start));
             entry
         }
         Err(err) => {
@@ -288,6 +295,10 @@ pub unsafe extern "C" fn relibc_ld_so_start(sp: &'static mut Stack, ld_entry: us
         tcb.linker_ptr = Box::into_raw(Box::new(Mutex::new(linker)));
         tcb.mspace = ALLOCATOR.get();
     }
+
+    // Log total ld.so time
+    perf::log_event("ldso", "total", perf::timestamp_ns().saturating_sub(ldso_start));
+
     if is_manual {
         eprintln!("[ld.so]: entry '{}': {:#x}", path, entry);
     }

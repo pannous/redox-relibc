@@ -6,6 +6,8 @@ use redox_rt::{
 };
 use syscall::{EMFILE, Error, Result};
 
+use super::perf;
+
 use crate::{
     header::{
         errno::EINVAL,
@@ -23,17 +25,20 @@ use super::Sys;
 pub type RawResult = usize;
 
 pub fn open(path: &str, oflag: c_int, mode: mode_t) -> Result<usize> {
+    let start = perf::start();
     let usize_fd = super::path::open(
         path,
         ((oflag as usize) & 0xFFFF_0000) | ((mode as usize) & 0xFFFF),
     )?;
 
-    c_int::try_from(usize_fd)
+    let result = c_int::try_from(usize_fd)
         .map_err(|_| {
             let _ = syscall::close(usize_fd);
             Error::new(EMFILE)
         })
-        .map(|f| f as usize)
+        .map(|f| f as usize);
+    perf::end_log(start, "syscall", path);
+    result
 }
 
 pub unsafe fn fstat(fd: usize, buf: *mut crate::header::sys_stat::stat) -> syscall::Result<()> {

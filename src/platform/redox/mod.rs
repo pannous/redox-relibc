@@ -72,6 +72,7 @@ pub(crate) mod signal;
 mod socket;
 pub mod strace;
 mod timer;
+pub mod perf;
 
 static mut BRK_CUR: *mut c_void = ptr::null_mut();
 static mut BRK_END: *mut c_void = ptr::null_mut();

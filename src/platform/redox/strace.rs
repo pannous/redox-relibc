@@ -32,7 +32,7 @@ fn check_env() {
     // Check STRACE environment variable
     // We use raw getenv to avoid recursion
     unsafe {
-        extern "C" {
+        unsafe extern "C" {
             fn getenv(name: *const i8) -> *mut i8;
         }
 
