@@ -11,7 +11,7 @@
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// Set to true to always emit boot timing (for development)
-const ALWAYS_ENABLED: bool = true;
+const ALWAYS_ENABLED: bool = false;
 
 /// Whether timing is enabled (checked once at startup)
 static ENABLED: AtomicBool = AtomicBool::new(ALWAYS_ENABLED);
