@@ -21,9 +21,11 @@ static BOOT_START: AtomicU64 = AtomicU64::new(0);
 
 /// Initialize boot timing - call once at the very start of ld.so
 pub fn init() {
+    if !ALWAYS_ENABLED {
+        return;
+    }
     let now = timestamp_ns();
     BOOT_START.store(now, Ordering::SeqCst);
-    ENABLED.store(true, Ordering::SeqCst);
 }
 
 /// Get current monotonic timestamp in nanoseconds using raw syscall
